@@ -6,8 +6,6 @@ from numpy.matrixlib.defmatrix import matrix
 from pandas.io.pytables import Selection
 
 
-
-# ======================================INPUT=============================================
 def get_float(prompt):
     while True:
         try:
