@@ -198,6 +198,7 @@ def selection(population, fitness_score, k=3):
 
     # return the individual
     return population[best]
+            
 
 
 
