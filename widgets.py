@@ -29,17 +29,39 @@ class Button:
 
 
 class Spinbox:
-    _BTN_W = 24
+    """
+    A numeric stepper with -/+ buttons.
 
-    def __init__(self, rect, value, mn, mx, font):
-        self.rect  = pygame.Rect(rect)
-        self.value = value
-        self.mn    = mn
-        self.mx    = mx
-        self.font  = font
+    If `editable=True` (default), double-clicking the value area lets you
+    type a number directly instead of clicking +/- repeatedly. Press ENTER
+    to confirm, ESCAPE to cancel, BACKSPACE to edit. Pass editable=False to
+    disable this (used for VEHICLES, since typing a vehicle count freely
+    can put the GA in a confusing state).
+    """
+    _BTN_W = 24
+    _DOUBLE_CLICK_MS = 400
+
+    def __init__(self, rect, value, mn, mx, font, editable=True):
+        self.rect     = pygame.Rect(rect)
+        self.value    = value
+        self.mn       = mn
+        self.mx       = mx
+        self.font     = font
+        self.editable = editable
         bw = self._BTN_W
         self.bd = pygame.Rect(rect[0],               rect[1], bw, rect[3])
         self.bi = pygame.Rect(rect[0] + rect[2] - bw, rect[1], bw, rect[3])
+
+        self._editing       = False
+        self._edit_str      = ""
+        self._last_click_ms = -10_000
+        self._last_click_pos = (-1, -1)
+
+    @property
+    def _value_rect(self):
+        bw = self._BTN_W
+        return pygame.Rect(self.rect.x + bw, self.rect.y,
+                           self.rect.width - 2 * bw, self.rect.height)
 
     def draw(self, surf):
         pygame.draw.rect(surf, PANEL_BG, self.rect, border_radius=5)
@@ -51,15 +73,64 @@ class Spinbox:
             pygame.draw.rect(surf, BORDER, btn, 1, border_radius=4)
             t = self.font.render(sym, True, TEXT_PRI)
             surf.blit(t, t.get_rect(center=btn.center))
-        v = self.font.render(str(self.value), True, ACCENT)
+
+        if self._editing:
+            cursor = "|" if (pygame.time.get_ticks() // 500) % 2 == 0 else ""
+            disp   = self._edit_str + cursor
+            v = self.font.render(disp, True, ACCENT)
+            vr = self._value_rect
+            pygame.draw.rect(surf, (20, 20, 70), vr, border_radius=4)
+            pygame.draw.rect(surf, ACCENT, vr, 1, border_radius=4)
+        else:
+            v = self.font.render(str(self.value), True, ACCENT)
         surf.blit(v, v.get_rect(center=self.rect.center))
 
+    def _commit_edit(self):
+        try:
+            n = int(self._edit_str)
+            self.value = max(self.mn, min(self.mx, n))
+        except ValueError:
+            pass
+        self._editing  = False
+        self._edit_str = ""
+
     def handle(self, ev):
+        if self._editing:
+            if ev.type == pygame.KEYDOWN:
+                if ev.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                    self._commit_edit()
+                elif ev.key == pygame.K_ESCAPE:
+                    self._editing  = False
+                    self._edit_str = ""
+                elif ev.key == pygame.K_BACKSPACE:
+                    self._edit_str = self._edit_str[:-1]
+                elif ev.unicode.isdigit():
+                    self._edit_str += ev.unicode
+            elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
+                if not self._value_rect.collidepoint(ev.pos):
+                    self._commit_edit()
+            return
+
         if ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
             if self.bd.collidepoint(ev.pos):
                 self.value = max(self.mn, self.value - 1)
-            elif self.bi.collidepoint(ev.pos):
+                return
+            if self.bi.collidepoint(ev.pos):
                 self.value = min(self.mx, self.value + 1)
+                return
+
+            if self.editable and self._value_rect.collidepoint(ev.pos):
+                now = pygame.time.get_ticks()
+                is_double = (
+                    now - self._last_click_ms < self._DOUBLE_CLICK_MS
+                    and math.hypot(ev.pos[0] - self._last_click_pos[0],
+                                   ev.pos[1] - self._last_click_pos[1]) < 10
+                )
+                self._last_click_ms  = now
+                self._last_click_pos = ev.pos
+                if is_double:
+                    self._editing  = True
+                    self._edit_str = ""
 
 
 class Slider:

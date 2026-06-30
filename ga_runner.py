@@ -85,15 +85,20 @@ def run_ga(depot: Node, customers: list, demands: list,
         fits = [_logic.fitness(ind, matrix, demands, v_cap) for ind in population]
         gb   = max(fits)
         ga_  = sum(fits) / len(fits)
-        history.append((gb, ga_))
 
         bi = fits.index(gb)
         if gb > best_fit:
             best_fit   = gb
             best_route = population[bi]
 
+        # Plot the running best-ever fitness (monotonic, never decreases)
+        # rather than the current generation's best, which can dip if a
+        # previously-best individual gets mutated.
+        history.append((best_fit, ga_))
+
         sp  = sorted(zip(fits, population), reverse=True)
-        new = [ind for _, ind in sp[:elite_k]]
+        elites = [ind for _, ind in sp[:elite_k]]   # kept untouched below
+        new = list(elites)
         ri  = random.randint(elite_k, pop_size - 1)
         new.append(sp[ri][1])
 
@@ -102,7 +107,9 @@ def run_ga(depot: Node, customers: list, demands: list,
             p2 = _logic.selection(population, fits)
             new.append(_logic.order_crossover(p1, p2, demands, v_cap))
 
-        new        = _logic.mutate_population(new)
-        population = new
+        # Mutate everyone except the protected elites, so the best solution
+        # found so far can never be degraded by a later generation.
+        mutated_tail = _logic.mutate_population(new[len(elites):])
+        population   = elites + mutated_tail
 
     return decode_chromosome(best_route, customers), history

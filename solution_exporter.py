@@ -19,6 +19,23 @@ If an address is not found for a customer ID the coordinate is shown instead.
 
 import os
 import datetime
+import hashlib
+
+# ── macOS / LibreSSL compatibility patch ────────────────────────────────────
+# Some Python builds (notably python.org installers on macOS linked against
+# LibreSSL instead of OpenSSL) reject the `usedforsecurity` keyword that
+# reportlab passes to hashlib.md5() internally for non-security fingerprint
+# hashing. This wraps hashlib.md5 so it silently drops that kwarg if the
+# underlying implementation doesn't accept it — harmless, since reportlab
+# never uses MD5 for actual security purposes.
+_orig_md5 = hashlib.md5
+def _safe_md5(*args, **kwargs):
+    try:
+        return _orig_md5(*args, **kwargs)
+    except TypeError:
+        kwargs.pop("usedforsecurity", None)
+        return _orig_md5(*args, **kwargs)
+hashlib.md5 = _safe_md5
 
 from reportlab.lib.pagesizes   import A4
 from reportlab.lib.styles      import getSampleStyleSheet, ParagraphStyle
@@ -29,7 +46,8 @@ from reportlab.platypus        import (
 )
 
 # ── default output folder ──────────────────────────────────────────────────────
-DEFAULT_OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "exports")
+# PDFs are saved directly in the same folder as the .py files (no subfolder).
+DEFAULT_OUT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 # ── colour palette (matches app theme) ────────────────────────────────────────

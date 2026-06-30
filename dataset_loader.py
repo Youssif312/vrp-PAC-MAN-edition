@@ -264,9 +264,8 @@ class DatasetPanel:
                 row = (my - lr.y - 4) // 34
                 idx = self._scroll + row
                 if 0 <= idx < len(self._files):
-                    if self._sel == idx:
-                        self._do_load()   # double-click == load
                     self._sel = idx
+                    self._error = ""
 
     def _clamp_scroll(self):
         mv = self._max_vis()

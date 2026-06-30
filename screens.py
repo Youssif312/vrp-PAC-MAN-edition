@@ -24,6 +24,8 @@ class DemandInputScreen:
         self.done      = False
         self.cancelled = False
         self.scroll    = 0
+        self._dragging_bar = False
+        self._drag_offset_y = 0
 
     # ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -45,6 +47,42 @@ class DemandInputScreen:
 
     def _confirm_btn(self): return pygame.Rect(W // 2 - 110, H - 65, 100, 38)
     def _cancel_btn(self):  return pygame.Rect(W // 2 +  10, H - 65, 100, 38)
+
+    def _list_area(self):
+        """Bounding box of the customer rows (used to size the scrollbar)."""
+        hx = W // 2 - 170
+        top = 155
+        mv  = self._max_vis()
+        h   = mv * 34
+        return pygame.Rect(hx - 4, top - 2, 348, h)
+
+    def _scrollbar_track(self):
+        la = self._list_area()
+        return pygame.Rect(la.right + 12, la.y, 14, la.height)
+
+    def _scrollbar_thumb(self):
+        track = self._scrollbar_track()
+        total = len(self.customers)
+        mv    = self._max_vis()
+        if total <= mv:
+            return None
+        thumb_h = max(24, int(track.height * mv / total))
+        max_scroll = total - mv
+        t = self.scroll / max_scroll if max_scroll > 0 else 0
+        thumb_y = track.y + int((track.height - thumb_h) * t)
+        return pygame.Rect(track.x, thumb_y, track.width, thumb_h)
+
+    def _btn_jump_end(self):
+        track = self._scrollbar_track()
+        return pygame.Rect(track.x - 2, track.bottom + 8, track.width + 4, 26)
+
+    def _btn_jump_start(self):
+        track = self._scrollbar_track()
+        return pygame.Rect(track.x - 2, track.y - 34, track.width + 4, 26)
+
+    def _set_scroll(self, value: int):
+        mx = max(0, len(self.customers) - self._max_vis())
+        self.scroll = max(0, min(mx, value))
 
     # ── Event handling ─────────────────────────────────────────────────────────
 
@@ -88,6 +126,20 @@ class DemandInputScreen:
             mx = max(0, len(self.customers) - self._max_vis())
             self.scroll = max(0, min(mx, self.scroll - ev.y))
 
+        if ev.type == pygame.MOUSEBUTTONUP and ev.button == 1:
+            self._dragging_bar = False
+
+        if ev.type == pygame.MOUSEMOTION and self._dragging_bar:
+            track = self._scrollbar_track()
+            thumb = self._scrollbar_thumb()
+            if thumb is not None and track.height > thumb.height:
+                rel_y   = ev.pos[1] - track.y - self._drag_offset_y
+                t       = rel_y / (track.height - thumb.height)
+                total   = len(self.customers)
+                mv      = self._max_vis()
+                self._set_scroll(round(t * (total - mv)))
+            return
+
         if ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
             mx, my = ev.pos
             if self._confirm_btn().collidepoint(mx, my):
@@ -97,6 +149,31 @@ class DemandInputScreen:
             if self._cancel_btn().collidepoint(mx, my):
                 self.cancelled = True
                 return
+
+            # scrollbar: jump-to-start / jump-to-end shortcuts
+            if len(self.customers) > self._max_vis():
+                if self._btn_jump_start().collidepoint(mx, my):
+                    self._set_scroll(0)
+                    return
+                if self._btn_jump_end().collidepoint(mx, my):
+                    self._set_scroll(len(self.customers))
+                    return
+
+                thumb = self._scrollbar_thumb()
+                track = self._scrollbar_track()
+                if thumb is not None and thumb.collidepoint(mx, my):
+                    self._dragging_bar  = True
+                    self._drag_offset_y = my - thumb.y
+                    return
+                if track.collidepoint(mx, my):
+                    # click on track (outside thumb) -> jump one page
+                    mv = self._max_vis()
+                    if thumb is not None and my < thumb.y:
+                        self._set_scroll(self.scroll - mv)
+                    else:
+                        self._set_scroll(self.scroll + mv)
+                    return
+
             for li, ci in enumerate(self._vis()):
                 ry  = 155 + li * 34
                 hx2 = W // 2 - 170
@@ -188,6 +265,35 @@ class DemandInputScreen:
                 True, TEXT_SEC,
             )
             s.blit(sh, sh.get_rect(centerx=W // 2, y=H - 100))
+
+        # scrollbar (only if list overflows)
+        if total > mv:
+            track = self._scrollbar_track()
+            pygame.draw.rect(s, (20, 20, 60), track, border_radius=6)
+            pygame.draw.rect(s, BORDER, track, 1, border_radius=6)
+
+            thumb = self._scrollbar_thumb()
+            if thumb is not None:
+                thumb_col = ACCENT if thumb.collidepoint(hov) or self._dragging_bar else (70, 70, 180)
+                pygame.draw.rect(s, thumb_col, thumb, border_radius=6)
+                pygame.draw.rect(s, BORDER, thumb, 1, border_radius=6)
+
+            # jump-to-start button (▲ above track)
+            jb_start = self._btn_jump_start()
+            c1 = BTN_HOV if jb_start.collidepoint(hov) else BTN_BG
+            pygame.draw.rect(s, c1, jb_start, border_radius=4)
+            pygame.draw.rect(s, BORDER, jb_start, 1, border_radius=4)
+            up = self.font_xs.render("▲", True, TEXT_PRI)
+            s.blit(up, up.get_rect(center=jb_start.center))
+
+            # jump-to-end button (▼ below track, gets you to the last
+            # customers instantly so CONFIRM is one click away)
+            jb_end = self._btn_jump_end()
+            c2 = BTN_SOLVE_H if jb_end.collidepoint(hov) else BTN_SOLVE
+            pygame.draw.rect(s, c2, jb_end, border_radius=4)
+            pygame.draw.rect(s, BORDER, jb_end, 1, border_radius=4)
+            dn = self.font_xs.render("▼ END", True, TEXT_PRI)
+            s.blit(dn, dn.get_rect(center=jb_end.center))
 
         # confirm / cancel buttons
         cb  = self._confirm_btn()

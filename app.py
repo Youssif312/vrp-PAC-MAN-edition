@@ -15,8 +15,7 @@ from sound   import SoundManager
 from widgets import Button, Spinbox, Slider
 from screens import DemandInputScreen, FitnessGraph
 from ga_runner import run_ga, LOGIC_OK
-
-from dataset_loader   import DatasetPanel, load_addresses, ADDRESSES_FILE
+from dataset_loader import DatasetPanel, load_addresses, ADDRESSES_FILE
 from solution_exporter import export_solution_pdf
 
 
@@ -34,65 +33,32 @@ def _pxfont(sz, bold=False):
 # ── Main application ───────────────────────────────────────────────────────────
 
 class VRPApp:
-    #NEW------------------------------------
-    def _inject_dataset(self, depot_d: dict, customers_d: list):
 
-        import math
-        from nodes import Node
-
-        # canvas bounds
-        mg = 60
-        cx0 = CANVAS_X + mg;
-        cx1 = W - mg
-        cy0 = mg;
-        cy1 = GRAPH_Y - mg
-        cw = cx1 - cx0;
-        ch = cy1 - cy0
-
-        # find bounding box of raw data
-        all_x = [depot_d["x"]] + [c["x"] for c in customers_d]
-        all_y = [depot_d["y"]] + [c["y"] for c in customers_d]
-        rx0, rx1 = min(all_x), max(all_x)
-        ry0, ry1 = min(all_y), max(all_y)
-        rw = max(rx1 - rx0, 1);
-        rh = max(ry1 - ry0, 1)
-
-        def scale(x, y):
-            sx = cx0 + (x - rx0) / rw * cw
-            sy = cy0 + (y - ry0) / rh * ch
-            return sx, sy
-
-        # reset everything
-        self.customers.clear()
-        self.routes.clear()
-        self.trucks.clear()
-        self.node_ctr = 0
-        self.fitness_history = []
-        self.fitness_graph.reset()
-
-        dx, dy = scale(depot_d["x"], depot_d["y"])
-        self.depot = Node(dx, dy, -1)
-
-        for c in customers_d:
-            sx, sy = scale(c["x"], c["y"])
-            self.customers.append(Node(sx, sy, self.node_ctr, demand=c["demand"]))
-            self.node_ctr += 1
-
-        self._rebuild_demands()
-        self.sound.play("randomize")
-        self.status = (f"Loaded {len(self.customers)} customers from dataset. "
-                       f"Press SOLVE.")
     # ── Init ───────────────────────────────────────────────────────────────────
 
     def __init__(self):
-        #NEW
-        self.demand_screen = None
-        self.dataset_panel: Optional[DatasetPanel] = None
-        self.addresses: dict = {}
-
         pygame.init()
-        self.screen = pygame.display.set_mode((W, H))
+        # The real OS window is resizable like any normal application.
+        # Internally we still render everything onto a fixed W x H surface
+        # (so none of the existing layout/click math has to change), then
+        # that surface is scaled to fit whatever size the user resizes the
+        # window to, letterboxed to preserve aspect ratio.
+        self.window = pygame.display.set_mode((W, H), pygame.RESIZABLE)
+        self.screen = pygame.Surface((W, H))   # fixed-resolution canvas
         pygame.display.set_caption("PAC-VRP Solver")
+
+        self._win_size   = (W, H)
+        self._render_rect = pygame.Rect(0, 0, W, H)
+        self._scale       = 1.0
+        self._update_render_rect()
+
+        # Every widget in this codebase calls pygame.mouse.get_pos() directly
+        # for hover highlighting. Since the real OS window can now be any
+        # size, we transparently patch get_pos() so it always returns
+        # coordinates in the fixed internal W x H canvas space — this means
+        # none of the existing widget/button code needs to change.
+        self._real_get_pos = pygame.mouse.get_pos
+        pygame.mouse.get_pos = lambda: self._win_to_canvas(self._real_get_pos())
 
         self.font_lg = _pxfont(20, bold=True)
         self.font_md = _pxfont(16)
@@ -122,6 +88,9 @@ class VRPApp:
         self.route_revealed: List[float]            = []
         self.fitness_history: List[Tuple[float, float]] = []
         self.demand_screen:  Optional[DemandInputScreen] = None
+        self.dataset_panel:  Optional[DatasetPanel] = None
+        self.addresses: dict = {}
+        self._block_message: Optional[str] = None
 
         self._init_widgets()
         gm = 6
@@ -147,7 +116,7 @@ class VRPApp:
 
         self._sep.append(y); y += GAP
         self._lbl_y['vehicles'] = y; y += 16
-        self.spin_vehicles = Spinbox((px, y, pw, BH), 3, 1, 8, self.font_sm); y += BH + GAP
+        self.spin_vehicles = Spinbox((px, y, pw, BH), 3, 1, 8, self.font_sm, editable=False); y += BH + GAP
 
         self._sep.append(y); y += GAP
         self._lbl_y['capacity'] = y; y += 16
@@ -178,18 +147,11 @@ class VRPApp:
         self.btn_clear = Button((px+hw+4, y, hw, BH), "CLEAR", BTN_CLR,  BTN_CLR_H,  self.font_xs)
         y += BH + GAP + 4
 
-        #NEW
-        self._sep.append(y);
-        y += GAP
-        self._lbl_y['dataset'] = y;
-        y += 16
-        self.btn_dataset = Button(
-            (px, y, pw, BH), "ADD DATASET", BTN_RAND, BTN_RAND_H, self.font_xs
-        );
+        self._sep.append(y); y += GAP
+        self._lbl_y['dataset'] = y; y += 16
+        self.btn_dataset = Button((px, y, pw, BH), "ADD DATASET", BTN_RAND, BTN_RAND_H, self.font_xs)
         y += BH + GAP
-        self.btn_export = Button(
-            (px, y, pw, BH), "EXTRACT PDF", BTN_SOLVE, BTN_SOLVE_H, self.font_xs
-        );
+        self.btn_export = Button((px, y, pw, BH), "EXTRACT PDF", BTN_SOLVE, BTN_SOLVE_H, self.font_xs)
         y += BH + GAP + 4
 
         self._sep.append(y); y += GAP
@@ -199,6 +161,43 @@ class VRPApp:
 
     def canvas_rect(self):
         return pygame.Rect(CANVAS_X, 0, CANVAS_W, GRAPH_Y)
+
+    # ── Resizable-window support ───────────────────────────────────────────────
+    # Internally everything is drawn onto a fixed W x H surface (self.screen).
+    # That surface is then scaled to fit the real, resizable OS window,
+    # preserving aspect ratio with letterboxing. These helpers translate
+    # between "real window pixel" space and "internal canvas" space.
+
+    def _update_render_rect(self):
+        ww, wh = self._win_size
+        scale  = min(ww / W, wh / H)
+        scale  = max(scale, 0.1)
+        rw, rh = int(W * scale), int(H * scale)
+        rx, ry = (ww - rw) // 2, (wh - rh) // 2
+        self._scale = scale
+        self._render_rect = pygame.Rect(rx, ry, rw, rh)
+
+    def _win_to_canvas(self, pos):
+        """Map a real-window pixel position to internal W x H canvas space."""
+        wx, wy = pos
+        rr = self._render_rect
+        if rr.width <= 0 or rr.height <= 0:
+            return (wx, wy)
+        cx = (wx - rr.x) / self._scale
+        cy = (wy - rr.y) / self._scale
+        return (int(cx), int(cy))
+
+    def _present(self):
+        """Scale the fixed-size internal canvas onto the real, resizable window."""
+        self.window.fill((0, 0, 0))
+        if self._render_rect.size == (W, H):
+            scaled = self.screen
+        else:
+            scaled = pygame.transform.smoothscale(
+                self.screen, self._render_rect.size
+            )
+        self.window.blit(scaled, self._render_rect.topleft)
+        pygame.display.flip()
 
     def node_at(self, x, y) -> Optional[Node]:
         candidates = ([self.depot] if self.depot else []) + self.customers
@@ -265,6 +264,83 @@ class VRPApp:
         self.status          = "Canvas cleared."
         self.sound.play("clear")
 
+    # ── Dataset / PDF export ───────────────────────────────────────────────────
+
+    def open_dataset_panel(self):
+        self.dataset_panel = DatasetPanel(
+            self.screen, self.font_lg, self.font_md, self.font_sm, self.font_xs
+        )
+        print(f"[dataset] Panel opened. Files found: {self.dataset_panel._files}")
+
+    def _inject_dataset(self, depot_d: dict, customers_d: list):
+        """Convert loaded dataset dicts into Node objects, scaled to the canvas."""
+        mg  = 60
+        cx0, cx1 = CANVAS_X + mg, W - mg
+        cy0, cy1 = mg, GRAPH_Y - mg
+        cw, ch   = cx1 - cx0, cy1 - cy0
+
+        all_x = [depot_d["x"]] + [c["x"] for c in customers_d]
+        all_y = [depot_d["y"]] + [c["y"] for c in customers_d]
+        rx0, rx1 = min(all_x), max(all_x)
+        ry0, ry1 = min(all_y), max(all_y)
+        rw = max(rx1 - rx0, 1e-9)
+        rh = max(ry1 - ry0, 1e-9)
+
+        def scale(x, y):
+            sx = cx0 + (x - rx0) / rw * cw
+            sy = cy0 + (y - ry0) / rh * ch
+            return sx, sy
+
+        self.customers.clear()
+        self.routes.clear()
+        self.trucks.clear()
+        self.node_ctr        = 0
+        self.fitness_history = []
+        self.fitness_graph.reset()
+        self.animating = False
+        self.paused    = False
+
+        dx, dy     = scale(depot_d["x"], depot_d["y"])
+        self.depot = Node(dx, dy, -1)
+
+        for c in customers_d:
+            sx, sy = scale(c["x"], c["y"])
+            self.customers.append(Node(sx, sy, self.node_ctr, demand=c["demand"]))
+            self.node_ctr += 1
+
+        self._rebuild_demands()
+        self.sound.play("randomize")
+        self.status = f"Loaded {len(self.customers)} customers from dataset. Press SOLVE."
+        print(f"[dataset] Loaded depot + {len(self.customers)} customers. Press SOLVE.")
+
+    def export_pdf(self):
+        if not self.routes or not self.depot:
+            self.status = "Cannot export: click SOLVE first, no routes yet!"
+            self._block_message = self.status
+            print("[export] Blocked: no routes/depot yet. Solve first.")
+            return
+        try:
+            self.addresses = load_addresses(ADDRESSES_FILE)
+        except Exception as e:
+            self.addresses = {}
+            print(f"[export] Warning: could not load addresses.xlsx: {e}")
+
+        try:
+            ok, result = export_solution_pdf(self.routes, self.depot, self.addresses)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            ok, result = False, str(e)
+
+        if ok:
+            self.status = f"PDF saved: {result}"
+            self._block_message = f"PDF saved successfully:\n{result}"
+            print(f"[export] PDF saved to: {result}")
+        else:
+            self.status = f"PDF error: {result}"
+            self._block_message = f"PDF export failed:\n{result}"
+            print(f"[export] ERROR: {result}")
+
     # ── Solve flow ─────────────────────────────────────────────────────────────
 
     def solve(self):
@@ -297,6 +373,8 @@ class VRPApp:
         if self.v_capacity < max_single:
             self.status = (f"BLOCKED: Capacity {self.v_capacity} too low! "
                            f"Customer needs {max_single}. Raise CAPACITY.")
+            print(f"[solve] BLOCKED: capacity {self.v_capacity} < max single demand {max_single}")
+            self._block_message = self.status
             return
 
         min_v = math.ceil(total_d / self.v_capacity)
@@ -304,12 +382,17 @@ class VRPApp:
             self.status = (f"BLOCKED: {n_vehicles} truck(s) not enough. "
                            f"Need >={min_v} (demand {total_d} / cap {self.v_capacity}). "
                            f"Raise VEHICLES.")
+            print(f"[solve] BLOCKED: {n_vehicles} vehicles < required {min_v} "
+                  f"(total demand {total_d} / capacity {self.v_capacity})")
+            self._block_message = self.status
             return
+
+        self._block_message = None
 
         self.status = "Running GA...  please wait."
         self.screen.fill(BG)
         self.draw_panel(self.screen)
-        pygame.display.flip()
+        self._present()
         self.sound.play("solve")
 
         self.routes, self.fitness_history = run_ga(
@@ -546,10 +629,7 @@ class VRPApp:
         self.btn_rand_all.draw(surf)
         self.btn_solve.draw(surf)
         self.btn_clear.draw(surf)
-
-        #NEW--------------------------------------
-        surf.blit(self.font_xs.render("DATASET / EXPORT", True, TEXT_SEC),
-                  (10, self._lbl_y['dataset']))
+        surf.blit(self.font_xs.render("DATASET / EXPORT", True, TEXT_SEC), (10, self._lbl_y['dataset']))
         self.btn_dataset.draw(surf)
         self.btn_export.draw(surf)
 
@@ -602,6 +682,51 @@ class VRPApp:
             ht = self.font_xs.render("click to place depot", True, DEPOT_COL)
             surf.blit(ht, (mx + 14, my - 6))
 
+    def draw_block_popup(self, surf):
+        """Big, impossible-to-miss popup for blocked actions, errors, or successes."""
+        msg = self._block_message or ""
+        is_success = msg.lower().startswith("pdf saved")
+        accent = (90, 220, 110) if is_success else (220, 60, 60)
+        bg     = (5, 35, 10)     if is_success else (40, 5, 5)
+        title_txt = "SUCCESS" if is_success else "ATTENTION"
+
+        dim = pygame.Surface((W, H), pygame.SRCALPHA)
+        dim.fill((0, 0, 0, 170))
+        surf.blit(dim, (0, 0))
+
+        pw, ph = 560, 200
+        px = (W - pw) // 2
+        py = (H - ph) // 2
+        box = pygame.Rect(px, py, pw, ph)
+        pygame.draw.rect(surf, bg, box, border_radius=10)
+        pygame.draw.rect(surf, accent, box, 2, border_radius=10)
+
+        title = self.font_md.render(title_txt, True, accent)
+        surf.blit(title, title.get_rect(centerx=W // 2, y=py + 16))
+
+        words = msg.split()
+        lines, ln = [], ""
+        for w in words:
+            t = (ln + " " + w).strip()
+            if self.font_sm.size(t)[0] > pw - 60:
+                lines.append(ln); ln = w
+            else:
+                ln = t
+        if ln:
+            lines.append(ln)
+        for i, l in enumerate(lines):
+            t = self.font_sm.render(l, True, TEXT_PRI)
+            surf.blit(t, t.get_rect(centerx=W // 2, y=py + 56 + i * 22))
+
+        ok_btn = pygame.Rect(W // 2 - 60, py + ph - 50, 120, 36)
+        hov = pygame.mouse.get_pos()
+        c = (60, 60, 60) if not ok_btn.collidepoint(hov) else (90, 90, 90)
+        pygame.draw.rect(surf, c, ok_btn, border_radius=6)
+        pygame.draw.rect(surf, BORDER, ok_btn, 1, border_radius=6)
+        ok_t = self.font_sm.render("OK", True, TEXT_PRI)
+        surf.blit(ok_t, ok_t.get_rect(center=ok_btn.center))
+        self._block_ok_btn = ok_btn
+
     # ── Event handling ─────────────────────────────────────────────────────────
 
     def _handle_canvas_click(self, mx, my, button):
@@ -635,6 +760,13 @@ class VRPApp:
                     self.trucks = []
                     self.status = f"Removed node #{hit.idx}."
 
+    def _any_spinbox_editing(self) -> bool:
+        return any(
+            getattr(sb, "_editing", False)
+            for sb in (self.spin_vehicles, self.spin_capacity, self.spin_gen,
+                       self.spin_pop, self.spin_rand_count)
+        )
+
     def _handle_keydown(self, ev):
         k = ev.key
         if   k == pygame.K_ESCAPE:                        self.placing_depot = False
@@ -648,25 +780,6 @@ class VRPApp:
             on = self.sound.toggle()
             self.status = f"Sound {'ON' if on else 'MUTED'}"
 
-    #NEW-----------------------------------------------
-
-    def open_dataset_panel(self):
-        self.dataset_panel = DatasetPanel(
-            self.screen, self.font_lg, self.font_md, self.font_sm, self.font_xs
-        )
-
-    def export_pdf(self):
-        if not self.routes or not self.depot:
-            self.status = "Solve first before exporting."
-            return
-        # reload addresses each time so edits to the file are picked up
-        self.addresses = load_addresses(ADDRESSES_FILE)
-        ok, result = export_solution_pdf(self.routes, self.depot, self.addresses)
-        if ok:
-            self.status = f"PDF saved → {result}"
-        else:
-            self.status = f"PDF error: {result}"
-
     # ── Main loop ──────────────────────────────────────────────────────────────
 
     def run(self):
@@ -678,6 +791,35 @@ class VRPApp:
                 if ev.type == pygame.QUIT:
                     running = False
 
+                if ev.type == pygame.VIDEORESIZE:
+                    self._win_size = (ev.w, ev.h)
+                    self.window = pygame.display.set_mode(
+                        (ev.w, ev.h), pygame.RESIZABLE
+                    )
+                    self._update_render_rect()
+                    continue
+
+                # Remap mouse-event coordinates from real window space into
+                # the fixed W x H internal canvas space, so every existing
+                # click handler (written in 1200x850 coordinates) keeps
+                # working unmodified no matter how the user resizes the
+                # window.
+                if ev.type in (pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP,
+                               pygame.MOUSEMOTION):
+                    ev.pos = self._win_to_canvas(ev.pos)
+
+                # blocking popup intercepts all events until dismissed
+                if self._block_message is not None:
+                    if ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
+                        ok_btn = getattr(self, "_block_ok_btn", None)
+                        if ok_btn is not None and ok_btn.collidepoint(ev.pos):
+                            self._block_message = None
+                    elif ev.type == pygame.KEYDOWN and ev.key in (
+                        pygame.K_RETURN, pygame.K_ESCAPE, pygame.K_KP_ENTER
+                    ):
+                        self._block_message = None
+                    continue
+
                 # demand editor intercepts all events when open
                 if self.demand_screen is not None:
                     self.demand_screen.handle(ev)
@@ -688,7 +830,7 @@ class VRPApp:
                         self._run_ga_after_demands()
                     continue
 
-                # ── NEW dataset panel ──────────────────────────────────────────────
+                # dataset panel intercepts all events when open
                 if self.dataset_panel is not None:
                     self.dataset_panel.handle(ev)
                     res = self.dataset_panel.result()
@@ -700,9 +842,10 @@ class VRPApp:
                         self.dataset_panel = None
                         if err:
                             self.status = f"Load error: {err}"
+                            print(f"[dataset] Load FAILED: {err}")
                         else:
                             self._inject_dataset(depot_d, customers_d)
-                    continue  # ← keep this so other widgets are skipped
+                    continue
 
                 # widgets
                 self.spin_vehicles.handle(ev)
@@ -719,10 +862,8 @@ class VRPApp:
                 if self.btn_rand_all.clicked(ev): self.randomize_all()
                 if self.btn_solve.clicked(ev):    self.solve()
                 if self.btn_clear.clicked(ev):    self.clear()
-
-                #NEW------------------------
-                if self.btn_dataset.clicked(ev): self.open_dataset_panel()
-                if self.btn_export.clicked(ev):  self.export_pdf()
+                if self.btn_dataset.clicked(ev):  self.open_dataset_panel()
+                if self.btn_export.clicked(ev):   self.export_pdf()
 
                 # canvas mouse
                 if ev.type == pygame.MOUSEBUTTONDOWN:
@@ -741,7 +882,7 @@ class VRPApp:
                     self.trucks = []
                     self.status = "Node moved — re-solve."
 
-                if ev.type == pygame.KEYDOWN:
+                if ev.type == pygame.KEYDOWN and not self._any_spinbox_editing():
                     self._handle_keydown(ev)
 
             self.update_animation(dt)
@@ -763,11 +904,13 @@ class VRPApp:
                 self.draw_panel(self.screen)
                 self.draw_cursor_hint(self.screen)
 
-            #NEW----------------------
             if self.dataset_panel is not None:
                 self.dataset_panel.draw()
 
-            pygame.display.flip()
+            if self._block_message and self.demand_screen is None and self.dataset_panel is None:
+                self.draw_block_popup(self.screen)
+
+            self._present()
 
         pygame.quit()
 
