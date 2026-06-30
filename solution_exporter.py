@@ -19,7 +19,7 @@ Public API
     export_solution_pdf(routes, depot, addresses, out_path) -> (True, path) | (False, error)
 
 The `addresses` dict is keyed as f"C{node.idx}" (matches how app.py builds it
-from a dataset's own Address column or the legacy addresses.xlsx fallback).
+straight from the dataset file's own Address column).
 If an address is not found for a customer the coordinate is shown instead.
 
 Output location

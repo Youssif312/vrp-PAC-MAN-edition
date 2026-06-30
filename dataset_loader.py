@@ -9,16 +9,14 @@ Standalone module that adds two things to the VRP app:
      • click Load → returns depot + customer nodes ready for the app
 
 2. load_dataset(path)  – reads an .xlsx with columns:
-       Customer_ID | X_Coord | Y_Coord | Demand
+       Customer_ID | X_Coord | Y_Coord | Demand | Address
    The row whose Customer_ID is "Depot" (case-insensitive) becomes the depot.
-   All other rows become customers.
+   All other rows become customers. The Address column is optional but, if
+   present, addresses are read directly from this same file — no separate
+   address book file is needed.
 
-3. load_addresses(path) – reads an .xlsx with columns:
-       Customer_ID | Address
-   Returns a dict  {customer_id_str: address_str}
-
-Drop this file next to app.py.  The datasets folder and the address book path
-are configured by the two constants below.
+Drop this file next to app.py. The datasets folder is configured by the
+constant below.
 """
 
 import os
@@ -30,10 +28,6 @@ import pandas as pd
 # Folder that is scanned for *.xlsx dataset files.
 # Change this to whatever folder you keep your datasets in.
 DATASETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "datasets")
-
-# Path to the address-book Excel file.
-# Expected columns: Customer_ID, Address
-ADDRESSES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "addresses.xlsx")
 
 # ── Colours (match the app palette) ───────────────────────────────────────────
 _BG        = (  0,   0,   0)
@@ -65,10 +59,7 @@ def load_dataset(path: str):
         Customer_ID | X_Coord | Y_Coord | Demand
 
     Optional column:
-        Address     – if present, addresses are read directly from this
-                      same file, so a separate addresses.xlsx is no longer
-                      needed. (Still supported as a fallback — see
-                      load_addresses() below.)
+        Address     – addresses are read directly from this same file.
 
     Returns:
         depot     – dict  {x, y}                              (None if missing)
@@ -121,53 +112,6 @@ def load_dataset(path: str):
 
     except Exception as e:
         return None, [], str(e)
-
-
-def addresses_from_customers(customers: list) -> dict:
-    """
-    Build the {customer_id: address} dict directly from the customers list
-    returned by load_dataset() — used when addresses are embedded in the
-    dataset file itself rather than a separate addresses.xlsx.
-    """
-    return {
-        c["id"]: c["address"]
-        for c in customers
-        if c.get("address")
-    }
-
-
-def load_addresses(path: str = None) -> dict:
-    """
-    LEGACY FALLBACK: read a separate address-book Excel file.
-
-    This is only needed if your dataset file does NOT already have an
-    'Address' column — in that case load_dataset() reads addresses
-    directly and this function isn't needed at all.
-
-    Expected columns (case-insensitive):
-        Customer_ID | Address
-
-    Returns dict  { "C1": "123 Main St", ... }
-    Returns empty dict on any error or if the file doesn't exist.
-    """
-    if path is None:
-        path = ADDRESSES_FILE
-    if not os.path.isfile(path):
-        return {}
-    try:
-        df = pd.read_excel(path)
-        df.columns = [c.strip() for c in df.columns]
-        col_map    = {c.lower(): c for c in df.columns}
-        if "customer_id" not in col_map or "address" not in col_map:
-            return {}
-        id_col   = col_map["customer_id"]
-        addr_col = col_map["address"]
-        return {
-            str(row[id_col]).strip(): str(row[addr_col]).strip()
-            for _, row in df.iterrows()
-        }
-    except Exception:
-        return {}
 
 
 def scan_datasets(folder: str = None) -> list:

@@ -15,7 +15,7 @@ from sound   import SoundManager
 from widgets import Button, Spinbox, Slider
 from screens import DemandInputScreen, FitnessGraph
 from ga_runner import run_ga, LOGIC_OK
-from dataset_loader import DatasetPanel, load_addresses, ADDRESSES_FILE
+from dataset_loader import DatasetPanel
 from solution_exporter import export_solution_pdf
 
 
@@ -317,17 +317,6 @@ class VRPApp:
                 self.addresses[f"C{idx}"] = addr
             self.node_ctr += 1
 
-        # Fallback: if the dataset file had no Address column at all, try
-        # the legacy separate addresses.xlsx (matched by original Customer_ID
-        # from the file, e.g. "C1", "C2"...).
-        if not self.addresses:
-            legacy = load_addresses(ADDRESSES_FILE)
-            if legacy:
-                for i, c in enumerate(customers_d):
-                    orig_id = c.get("id", "")
-                    if orig_id in legacy:
-                        self.addresses[f"C{i}"] = legacy[orig_id]
-
         self._rebuild_demands()
         self.sound.play("randomize")
         n_addr = len(self.addresses)
@@ -342,9 +331,8 @@ class VRPApp:
             self._block_message = self.status
             print("[export] Blocked: no routes/depot yet. Solve first.")
             return
-        # self.addresses was already populated when the dataset was loaded
-        # (either from the dataset file's own Address column, or the
-        # legacy addresses.xlsx fallback). No need to reload here.
+        # self.addresses was already populated when the dataset was loaded,
+        # straight from the Address column in the same dataset file.
 
         try:
             ok, result = export_solution_pdf(self.routes, self.depot, self.addresses)
