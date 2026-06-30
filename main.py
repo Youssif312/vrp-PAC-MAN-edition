@@ -62,9 +62,13 @@ def run_logic_ga(depot, customers, demands, n_vehicles, v_cap, pop_size, n_gen):
     elite_k=max(1,int(0.2*pop_size))
     for _ in range(n_gen):
         fits=[_logic.fitness(ind,matrix,demands,v_cap) for ind in population]
-        gb=max(fits); ga_=sum(fits)/len(fits); history.append((gb,ga_))
+        gb=max(fits)
+        ga_=sum(fits)/len(fits)
         bi=fits.index(gb)
-        if gb>best_fit: best_fit=gb; best_route=population[bi]
+        if gb>best_fit:
+            best_fit=gb
+            best_route=population[bi]
+        history.append((best_fit,ga_))
         sp=sorted(zip(fits,population),reverse=True)
         new=[ind for _,ind in sp[:elite_k]]
         ri=random.randint(elite_k,pop_size-1); new.append(sp[ri][1])
@@ -158,10 +162,73 @@ VEHICLE_COLORS=[
     (255,255,0),(0,255,120),(180,80,255),(255,255,255),
 ]
 
-W=1200; H=850
-PANEL_W=260; CANVAS_X=PANEL_W; CANVAS_W=W-PANEL_W
-GRAPH_H=160; GRAPH_Y=H-GRAPH_H
+BASE_W=1200; BASE_H=850
+BASE_PANEL_W=260; BASE_GRAPH_H=160
+WIN_FRAC=0.875
+W=BASE_W; H=BASE_H
+PANEL_W=BASE_PANEL_W; CANVAS_X=PANEL_W; CANVAS_W=W-PANEL_W
+GRAPH_H=BASE_GRAPH_H; GRAPH_Y=H-GRAPH_H
 NODE_R=8; DEPOT_R=12
+
+
+def _compute_startup_size():
+    info=pygame.display.Info()
+    sw,sh=info.current_w,info.current_h
+    if sw<=0 or sh<=0: return BASE_W,BASE_H
+    return max(800,int(sw*WIN_FRAC)),max(600,int(sh*WIN_FRAC))
+
+
+def _apply_layout(w,h):
+    global W,H,PANEL_W,CANVAS_X,CANVAS_W,GRAPH_H,GRAPH_Y
+    W,H=w,h
+    PANEL_W=max(BASE_PANEL_W,int(BASE_PANEL_W*w/BASE_W))
+    CANVAS_X=PANEL_W; CANVAS_W=W-PANEL_W
+    GRAPH_H=max(BASE_GRAPH_H,int(BASE_GRAPH_H*h/BASE_H))
+    GRAPH_Y=H-GRAPH_H
+
+# Left sidebar visual sizing only (~50% larger text / proportional controls)
+SIDEBAR_FONT_TITLE  = 20
+SIDEBAR_FONT_HEADER = 17
+SIDEBAR_FONT_LABEL  = 15
+SIDEBAR_FONT_VALUE  = 16
+SIDEBAR_FONT_BTN    = 17
+SIDEBAR_FONT_ROUTES = 17
+SIDEBAR_FONT_STATUS = 15
+SIDEBAR_FONT_META   = 14
+SIDEBAR_BTN_H       = 34
+SIDEBAR_GAP         = 6
+SIDEBAR_STAT_ROW    = 22
+SIDEBAR_LABEL_H     = 17
+SIDEBAR_SPIN_BTN_W  = 32
+SIDEBAR_ROUTE_ROW   = 24
+SIDEBAR_STATUS_LINE = 18
+SIDEBAR_ROUTE_SECTION_H = 170
+
+# Customer Demands dialog scaling (~35% larger, centered on window)
+DEMAND_FONT_TITLE  = 22
+DEMAND_FONT_SUB    = 15
+DEMAND_FONT_HEADER = 17
+DEMAND_FONT_NAME   = 16
+DEMAND_FONT_VALUE  = 17
+DEMAND_FONT_BTN    = 16
+DEMAND_FONT_SCROLL = 15
+DEMAND_TABLE_W     = 460
+DEMAND_ROW_H       = 46
+DEMAND_ROW_PAD     = 41
+DEMAND_BTN_SZ      = 38
+DEMAND_ROW_START   = 188
+DEMAND_HEADER_Y    = 152
+DEMAND_HEADER_LINE = 175
+DEMAND_TITLE_Y     = 22
+DEMAND_SUB_Y       = 62
+DEMAND_DIVIDER_Y   = 94
+DEMAND_DIVIDER_MX  = 108
+DEMAND_BTN_W       = 135
+DEMAND_BTN_H       = 52
+DEMAND_BTN_GAP     = 14
+DEMAND_BTN_LIST_MARGIN = 40
+DEMAND_SCROLL_BAND = 22
+DEMAND_FOOTER_RES  = 295
 
 
 @dataclass
@@ -252,11 +319,10 @@ class Button:
         return ev.type==pygame.MOUSEBUTTONDOWN and ev.button==1 and self.rect.collidepoint(ev.pos)
 
 class Spinbox:
-    def __init__(self,rect,value,mn,mx,font):
+    def __init__(self,rect,value,mn,mx,font,btn_w=24):
         self.rect=pygame.Rect(rect); self.value=value; self.mn=mn; self.mx=mx; self.font=font
-        bw=24
-        self.bd=pygame.Rect(rect[0],rect[1],bw,rect[3])
-        self.bi=pygame.Rect(rect[0]+rect[2]-bw,rect[1],bw,rect[3])
+        self.bd=pygame.Rect(rect[0],rect[1],btn_w,rect[3])
+        self.bi=pygame.Rect(rect[0]+rect[2]-btn_w,rect[1],btn_w,rect[3])
     def draw(self,surf):
         pygame.draw.rect(surf,PANEL_BG,self.rect,border_radius=5)
         pygame.draw.rect(surf,BORDER,self.rect,1,border_radius=5)
@@ -282,7 +348,7 @@ class Slider:
         pygame.draw.line(surf,ACCENT,(self.rect.x,ty),(self.kx,ty),2)
         pygame.draw.circle(surf,ACCENT,(self.kx,ty),7); pygame.draw.circle(surf,TEXT_PRI,(self.kx,ty),4)
         l=self.font.render(f"{self.label}: {int(self.value)}",True,TEXT_SEC)
-        surf.blit(l,(self.rect.x,self.rect.y-13))
+        surf.blit(l,(self.rect.x,self.rect.y-20))
     def handle(self,ev):
         if ev.type==pygame.MOUSEBUTTONDOWN and ev.button==1:
             if math.hypot(ev.pos[0]-self.kx,ev.pos[1]-self.rect.centery)<12: self.drag=True
@@ -340,14 +406,29 @@ class FitnessGraph:
 
 
 class DemandInputScreen:
-    def __init__(self,screen,customers,font_lg,font_md,font_sm,font_xs):
+    def __init__(self,screen,customers,font_lg=None,font_md=None,font_sm=None,font_xs=None):
         self.screen=screen; self.customers=customers
-        self.font_lg=font_lg; self.font_md=font_md; self.font_sm=font_sm; self.font_xs=font_xs
+        def pxfont(sz,bold=False):
+            for nm in("Press Start 2P","Courier New","monospace"):
+                try: return pygame.font.SysFont(nm,sz,bold=bold)
+                except: pass
+            return pygame.font.SysFont("monospace",sz,bold=bold)
+        self.font_title=pxfont(DEMAND_FONT_TITLE,bold=True)
+        self.font_sub=pxfont(DEMAND_FONT_SUB)
+        self.font_header=pxfont(DEMAND_FONT_HEADER)
+        self.font_name=pxfont(DEMAND_FONT_NAME)
+        self.font_value=pxfont(DEMAND_FONT_VALUE)
+        self.font_btn=pxfont(DEMAND_FONT_BTN)
+        self.font_scroll=pxfont(DEMAND_FONT_SCROLL)
         self.demands=[c.demand for c in customers]
         self.active=0; self.input_str=str(self.demands[0])
         self.done=False; self.cancelled=False; self.scroll=0
 
-    def _max_vis(self): return min(len(self.customers),(H-220)//34)
+    def _table_x(self): return W//2-DEMAND_TABLE_W//2
+    def _row_geom(self,li):
+        hx=self._table_x(); ry=DEMAND_ROW_START+li*DEMAND_ROW_H; bs=DEMAND_BTN_SZ
+        return hx,ry,pygame.Rect(hx,ry,bs,bs),pygame.Rect(hx+DEMAND_TABLE_W-bs,ry,bs,bs),pygame.Rect(hx,ry,DEMAND_TABLE_W,bs)
+    def _max_vis(self): return min(len(self.customers),(H-DEMAND_FOOTER_RES)//DEMAND_ROW_H)
     def _vis(self): mv=self._max_vis(); return list(range(self.scroll,min(self.scroll+mv,len(self.customers))))
     def _commit(self):
         try:
@@ -355,8 +436,22 @@ class DemandInputScreen:
             if v>=1: self.demands[self.active]=v
         except: pass
         self.input_str=str(self.demands[self.active])
-    def _confirm_btn(self): return pygame.Rect(W//2-110,H-65,100,38)
-    def _cancel_btn(self):  return pygame.Rect(W//2+10, H-65,100,38)
+    def _list_bottom_y(self):
+        n=len(self._vis())
+        if n==0: return DEMAND_HEADER_LINE
+        _,ry,_,_,_=self._row_geom(n-1)
+        return ry-3+DEMAND_ROW_PAD
+    def _scroll_text_y(self): return self._list_bottom_y()+12
+    def _footer_y(self):
+        y=self._list_bottom_y()+DEMAND_BTN_LIST_MARGIN
+        if len(self.customers)>self._max_vis(): y+=DEMAND_SCROLL_BAND
+        return y
+    def _confirm_btn(self):
+        y=self._footer_y()
+        return pygame.Rect(W//2-DEMAND_BTN_W-DEMAND_BTN_GAP//2,y,DEMAND_BTN_W,DEMAND_BTN_H)
+    def _cancel_btn(self):
+        y=self._footer_y()
+        return pygame.Rect(W//2+DEMAND_BTN_GAP//2,y,DEMAND_BTN_W,DEMAND_BTN_H)
 
     def handle(self,ev):
         if ev.type==pygame.KEYDOWN:
@@ -382,9 +477,7 @@ class DemandInputScreen:
             if self._confirm_btn().collidepoint(mx,my): self._commit(); self.done=True; return
             if self._cancel_btn().collidepoint(mx,my):  self.cancelled=True; return
             for li,ci in enumerate(self._vis()):
-                ry=155+li*34
-                hx2=W//2-170
-                mr=pygame.Rect(hx2,ry,28,28); pr=pygame.Rect(hx2+312,ry,28,28); row=pygame.Rect(hx2,ry,340,28)
+                hx,ry,mr,pr,row=self._row_geom(li)
                 if mr.collidepoint(mx,my):
                     self._commit(); self.demands[ci]=max(1,self.demands[ci]-1); self.active=ci; self.input_str=str(self.demands[ci]); return
                 if pr.collidepoint(mx,my):
@@ -394,48 +487,49 @@ class DemandInputScreen:
 
     def draw(self):
         s=self.screen; s.fill((0,0,18))
-        t=self.font_lg.render("CUSTOMER DEMANDS",True,TEXT_PRI); s.blit(t,t.get_rect(centerx=W//2,y=16))
-        sub=self.font_xs.render("↑↓ navigate  |  type  |  ENTER next  |  scroll  |  ESC cancel",True,TEXT_SEC)
-        s.blit(sub,sub.get_rect(centerx=W//2,y=46))
-        pygame.draw.line(s,BORDER,(80,70),(W-80,70),1)
-        hx=W//2-170
-        s.blit(self.font_xs.render("Customer",True,ACCENT),(hx+36,118))
-        s.blit(self.font_xs.render("Demand",True,ACCENT),(hx+236,118))
-        pygame.draw.line(s,BORDER,(hx,135),(hx+340,135),1)
-        hov=pygame.mouse.get_pos()
+        t=self.font_title.render("CUSTOMER DEMANDS",True,TEXT_PRI); s.blit(t,t.get_rect(centerx=W//2,y=DEMAND_TITLE_Y))
+        sub=self.font_sub.render("↑↓ navigate  |  type  |  ENTER next  |  scroll  |  ESC cancel",True,TEXT_SEC)
+        s.blit(sub,sub.get_rect(centerx=W//2,y=DEMAND_SUB_Y))
+        pygame.draw.line(s,BORDER,(DEMAND_DIVIDER_MX,DEMAND_DIVIDER_Y),(W-DEMAND_DIVIDER_MX,DEMAND_DIVIDER_Y),1)
+        hx=self._table_x()
+        s.blit(self.font_header.render("Customer",True,ACCENT),(hx+48,DEMAND_HEADER_Y))
+        s.blit(self.font_header.render("Demand",True,ACCENT),(hx+319,DEMAND_HEADER_Y))
+        pygame.draw.line(s,BORDER,(hx,DEMAND_HEADER_LINE),(hx+DEMAND_TABLE_W,DEMAND_HEADER_LINE),1)
+        hov=pygame.mouse.get_pos(); demand_cx=hx+int(DEMAND_TABLE_W*0.706)
         for li,ci in enumerate(self._vis()):
-            ry=155+li*34; col=VEHICLE_COLORS[ci%len(VEHICLE_COLORS)]; ia=(ci==self.active)
-            pygame.draw.rect(s,(18,18,55) if ia else (5,5,28),(hx-4,ry-2,348,30),border_radius=4)
-            if ia: pygame.draw.rect(s,BORDER,(hx-4,ry-2,348,30),1,border_radius=4)
-            mr=pygame.Rect(hx,ry,28,28)
-            pygame.draw.rect(s,BTN_HOV if mr.collidepoint(hov) else BTN_BG,mr,border_radius=4)
-            pygame.draw.rect(s,BORDER,mr,1,border_radius=4)
-            mt=self.font_md.render("−",True,TEXT_PRI); s.blit(mt,mt.get_rect(center=mr.center))
-            pygame.draw.circle(s,col,(hx+40,ry+12),6)
-            lbl=self.font_xs.render(f"Customer {ci+1:02d}",True,TEXT_PRI if ia else TEXT_SEC); s.blit(lbl,(hx+50,ry+6))
+            hx,ry,mr,pr,_=self._row_geom(li); col=VEHICLE_COLORS[ci%len(VEHICLE_COLORS)]; ia=(ci==self.active)
+            pygame.draw.rect(s,(18,18,55) if ia else (5,5,28),(hx-5,ry-3,DEMAND_TABLE_W+10,DEMAND_ROW_PAD),border_radius=5)
+            if ia: pygame.draw.rect(s,BORDER,(hx-5,ry-3,DEMAND_TABLE_W+10,DEMAND_ROW_PAD),1,border_radius=5)
+            pygame.draw.rect(s,BTN_HOV if mr.collidepoint(hov) else BTN_BG,mr,border_radius=5)
+            pygame.draw.rect(s,BORDER,mr,1,border_radius=5)
+            mt=self.font_btn.render("−",True,TEXT_PRI); s.blit(mt,mt.get_rect(center=mr.center))
+            pygame.draw.circle(s,col,(hx+54,ry+DEMAND_BTN_SZ//2),8)
+            lbl=self.font_name.render(f"Customer {ci+1:02d}",True,TEXT_PRI if ia else TEXT_SEC); s.blit(lbl,(hx+67,ry+8))
             disp=(self.input_str if ia else str(self.demands[ci]))+(("|" if ia and (pygame.time.get_ticks()//500)%2==0 else ""))
-            dv=self.font_md.render(disp,True,ACCENT if ia else TEXT_PRI); s.blit(dv,dv.get_rect(centerx=hx+240,y=ry+5))
-            pr=pygame.Rect(hx+312,ry,28,28)
-            pygame.draw.rect(s,BTN_HOV if pr.collidepoint(hov) else BTN_BG,pr,border_radius=4)
-            pygame.draw.rect(s,BORDER,pr,1,border_radius=4)
-            pt=self.font_md.render("+",True,TEXT_PRI); s.blit(pt,pt.get_rect(center=pr.center))
+            dv=self.font_value.render(disp,True,ACCENT if ia else TEXT_PRI); s.blit(dv,dv.get_rect(centerx=demand_cx,y=ry+7))
+            pygame.draw.rect(s,BTN_HOV if pr.collidepoint(hov) else BTN_BG,pr,border_radius=5)
+            pygame.draw.rect(s,BORDER,pr,1,border_radius=5)
+            pt=self.font_btn.render("+",True,TEXT_PRI); s.blit(pt,pt.get_rect(center=pr.center))
         total=len(self.customers); mv=self._max_vis()
         if total>mv:
-            sh=self.font_xs.render(f"{self.scroll+1}–{min(self.scroll+mv,total)} of {total}",True,TEXT_SEC)
-            s.blit(sh,sh.get_rect(centerx=W//2,y=H-100))
+            sh=self.font_scroll.render(f"{self.scroll+1}–{min(self.scroll+mv,total)} of {total}",True,TEXT_SEC)
+            s.blit(sh,sh.get_rect(centerx=W//2,y=self._scroll_text_y()))
         cb=self._confirm_btn(); cx2=self._cancel_btn()
-        pygame.draw.rect(s,BTN_SOLVE_H if cb.collidepoint(hov) else BTN_SOLVE,cb,border_radius=6)
-        pygame.draw.rect(s,BORDER,cb,1,border_radius=6)
-        ct=self.font_md.render("CONFIRM",True,TEXT_PRI); s.blit(ct,ct.get_rect(center=cb.center))
-        pygame.draw.rect(s,BTN_CLR_H if cx2.collidepoint(hov) else BTN_CLR,cx2,border_radius=6)
-        pygame.draw.rect(s,BORDER,cx2,1,border_radius=6)
-        cc=self.font_md.render("CANCEL",True,TEXT_PRI); s.blit(cc,cc.get_rect(center=cx2.center))
+        pygame.draw.rect(s,BTN_SOLVE_H if cb.collidepoint(hov) else BTN_SOLVE,cb,border_radius=8)
+        pygame.draw.rect(s,BORDER,cb,1,border_radius=8)
+        ct=self.font_btn.render("CONFIRM",True,TEXT_PRI); s.blit(ct,ct.get_rect(center=cb.center))
+        pygame.draw.rect(s,BTN_CLR_H if cx2.collidepoint(hov) else BTN_CLR,cx2,border_radius=8)
+        pygame.draw.rect(s,BORDER,cx2,1,border_radius=8)
+        cc=self.font_btn.render("CANCEL",True,TEXT_PRI); s.blit(cc,cc.get_rect(center=cx2.center))
 
 
 class VRPApp:
     def __init__(self):
+        os.environ['SDL_VIDEO_CENTERED']='1'
         pygame.init()
-        self.screen=pygame.display.set_mode((W,H))
+        win_w,win_h=_compute_startup_size()
+        self.screen=pygame.display.set_mode((win_w,win_h),pygame.RESIZABLE)
+        _apply_layout(win_w,win_h)
         pygame.display.set_caption("PAC-VRP Solver")
         def pxfont(sz,bold=False):
             for nm in("Press Start 2P","Courier New","monospace"):
@@ -444,6 +538,14 @@ class VRPApp:
             return pygame.font.SysFont("monospace",sz,bold=bold)
         self.font_lg=pxfont(20,bold=True); self.font_md=pxfont(16)
         self.font_sm=pxfont(14);           self.font_xs=pxfont(13)
+        self.sb_title=pxfont(SIDEBAR_FONT_TITLE,bold=True)
+        self.sb_header=pxfont(SIDEBAR_FONT_HEADER)
+        self.sb_label=pxfont(SIDEBAR_FONT_LABEL)
+        self.sb_value=pxfont(SIDEBAR_FONT_VALUE)
+        self.sb_btn=pxfont(SIDEBAR_FONT_BTN,bold=True)
+        self.sb_routes=pxfont(SIDEBAR_FONT_ROUTES)
+        self.sb_status=pxfont(SIDEBAR_FONT_STATUS)
+        self.sb_meta=pxfont(SIDEBAR_FONT_META)
 
         self.sound=SoundManager()
         self.depot:Optional[Node]=None; self.customers:List[Node]=[]
@@ -456,44 +558,60 @@ class VRPApp:
         self.route_revealed:List[float]=[]; self.fitness_history:List[Tuple[float,float]]=[]
         self.demand_screen:Optional[DemandInputScreen]=None
         self._init_widgets()
+        self._update_layout_surfaces()
+        self.clock=pygame.time.Clock()
+
+    def _update_layout_surfaces(self):
         gm=6
         self.fitness_graph=FitnessGraph(CANVAS_X+gm,GRAPH_Y+gm,CANVAS_W-gm*2,GRAPH_H-gm*2,self.font_sm,self.font_xs)
-        self.clock=pygame.time.Clock()
+        self.trail_surf=pygame.Surface((W,H),pygame.SRCALPHA)
+
+    def _on_resize(self,w,h):
+        w=max(800,w); h=max(600,h)
+        hist=getattr(getattr(self,'fitness_graph',None),'history',[])
+        _apply_layout(w,h)
+        self.screen=pygame.display.set_mode((w,h),pygame.RESIZABLE)
+        self._init_widgets()
+        gm=6
+        self.fitness_graph.rect=pygame.Rect(CANVAS_X+gm,GRAPH_Y+gm,CANVAS_W-gm*2,GRAPH_H-gm*2)
+        self.fitness_graph.history=hist
         self.trail_surf=pygame.Surface((W,H),pygame.SRCALPHA)
 
     def _init_widgets(self):
-        px=10; pw=PANEL_W-20; BH=32; GAP=6; y=82
-        self._stats_y=y; y+=4*20+6; self._sep=[]; self._lbl_y={}
+        px=10; pw=PANEL_W-20; BH=SIDEBAR_BTN_H; GAP=SIDEBAR_GAP; y=82
+        self._stats_y=y; y+=4*SIDEBAR_STAT_ROW+GAP+2; self._sep=[]; self._lbl_y={}
+        sbw=SIDEBAR_SPIN_BTN_W
 
         self._sep.append(y); y+=GAP
-        self._lbl_y['vehicles']=y; y+=16
-        self.spin_vehicles=Spinbox((px,y,pw,BH),3,1,8,self.font_sm); y+=BH+GAP
+        self._lbl_y['vehicles']=y; y+=SIDEBAR_LABEL_H
+        self.spin_vehicles=Spinbox((px,y,pw,BH),3,1,8,self.sb_value,sbw); y+=BH+GAP
 
         self._sep.append(y); y+=GAP
-        self._lbl_y['capacity']=y; y+=16
-        self.spin_capacity=Spinbox((px,y,pw,BH),10,1,999,self.font_sm); y+=BH+GAP
+        self._lbl_y['capacity']=y; y+=SIDEBAR_LABEL_H
+        self.spin_capacity=Spinbox((px,y,pw,BH),10,1,999,self.sb_value,sbw); y+=BH+GAP
 
         self._sep.append(y); y+=GAP
-        self._lbl_y['gens']=y; y+=16
-        self.spin_gen=Spinbox((px,y,pw,BH),200,20,500,self.font_xs); y+=BH+GAP
-        self._lbl_y['pop']=y; y+=16
-        self.spin_pop=Spinbox((px,y,pw,BH),50,20,300,self.font_xs); y+=BH+GAP
+        self._lbl_y['gens']=y; y+=SIDEBAR_LABEL_H
+        self.spin_gen=Spinbox((px,y,pw,BH),200,20,500,self.sb_value,sbw); y+=BH+GAP
+        self._lbl_y['pop']=y; y+=SIDEBAR_LABEL_H
+        self.spin_pop=Spinbox((px,y,pw,BH),50,20,300,self.sb_value,sbw); y+=BH+GAP
 
         self._sep.append(y); y+=GAP
-        self._lbl_y['rand_count']=y; y+=16
-        self.spin_rand_count=Spinbox((px,y,pw,BH),15,3,50,self.font_xs); y+=BH+GAP
+        self._lbl_y['rand_count']=y; y+=SIDEBAR_LABEL_H
+        self.spin_rand_count=Spinbox((px,y,pw,BH),15,3,50,self.sb_value,sbw); y+=BH+GAP
 
         self._sep.append(y); y+=GAP
-        self._lbl_y['speed']=y; y+=16
-        self.slider=Slider((px,y+16,pw,14),30,500,150.0,self.font_xs,"Speed px/s"); y+=16+14+GAP+4
+        self._lbl_y['speed']=y; y+=SIDEBAR_LABEL_H
+        self.slider=Slider((px,y+SIDEBAR_LABEL_H,pw,14),30,500,150.0,self.sb_value,"Speed px/s")
+        y+=SIDEBAR_LABEL_H+14+GAP+4
 
         self._sep.append(y); y+=GAP
-        self._lbl_y['actions']=y; y+=16
+        self._lbl_y['actions']=y; y+=SIDEBAR_LABEL_H
         hw=(pw-4)//2
-        self.btn_depot   =Button((px,     y,hw,BH),"DEPOT",  BTN_BG,   BTN_HOV,   self.font_xs)
-        self.btn_rand_all=Button((px+hw+4,y,hw,BH),"RANDOM", BTN_RAND, BTN_RAND_H,self.font_xs); y+=BH+GAP
-        self.btn_solve   =Button((px,     y,hw,BH),"SOLVE",  BTN_SOLVE,BTN_SOLVE_H,self.font_xs)
-        self.btn_clear   =Button((px+hw+4,y,hw,BH),"CLEAR",  BTN_CLR,  BTN_CLR_H, self.font_xs); y+=BH+GAP+4
+        self.btn_depot   =Button((px,     y,hw,BH),"DEPOT",  BTN_BG,   BTN_HOV,   self.sb_btn)
+        self.btn_rand_all=Button((px+hw+4,y,hw,BH),"RANDOM", BTN_RAND, BTN_RAND_H,self.sb_btn); y+=BH+GAP
+        self.btn_solve   =Button((px,     y,hw,BH),"SOLVE",  BTN_SOLVE,BTN_SOLVE_H,self.sb_btn)
+        self.btn_clear   =Button((px+hw+4,y,hw,BH),"CLEAR",  BTN_CLR,  BTN_CLR_H, self.sb_btn); y+=BH+GAP+4
 
         self._sep.append(y); y+=GAP
         self._routes_y=y
@@ -659,12 +777,12 @@ class VRPApp:
     def draw_panel(self,surf):
         pygame.draw.rect(surf,PANEL_BG,(0,0,PANEL_W,H))
         pygame.draw.line(surf,BORDER,(PANEL_W,0),(PANEL_W,H),2)
-        surf.blit(self.font_lg.render("PAC-VRP",True,TEXT_PRI),(10,8))
+        surf.blit(self.sb_title.render("PAC-VRP",True,TEXT_PRI),(10,8))
         mute_col=ACCENT if self.sound._enabled else (160,50,50)
-        surf.blit(self.font_xs.render("M:mute" if self.sound._enabled else "M:unmute",True,mute_col),(10,32))
+        surf.blit(self.sb_meta.render("M:mute" if self.sound._enabled else "M:unmute",True,mute_col),(10,32))
         lc=(0,200,70) if _LOGIC_OK else (220,60,60)
-        surf.blit(self.font_xs.render("logic:ok" if _LOGIC_OK else "logic:MISS",True,lc),(10,46))
-        pygame.draw.line(surf,BORDER,(8,62),(PANEL_W-8,62),1)
+        surf.blit(self.sb_meta.render("logic:ok" if _LOGIC_OK else "logic:MISS",True,lc),(10,48))
+        pygame.draw.line(surf,BORDER,(8,64),(PANEL_W-8,64),1)
         all_done=bool(self.trucks) and all(t.done for t in self.trucks)
         anim_str="DONE!" if all_done else("PAUSED" if self.paused else("RUNNING" if self.animating else "IDLE"))
         anim_col=(80,220,100) if all_done else(ACCENT if self.animating and not self.paused else TEXT_PRI)
@@ -673,53 +791,59 @@ class VRPApp:
                            ("NODES",str(len(self.customers)),TEXT_PRI),
                            ("ROUTES",str(len(self.routes)),TEXT_PRI),
                            ("STATE",anim_str,anim_col)]:
-            surf.blit(self.font_xs.render(lbl,True,TEXT_SEC),(10,y))
-            vt=self.font_xs.render(val,True,vc); surf.blit(vt,(PANEL_W-10-vt.get_width(),y)); y+=20
+            surf.blit(self.sb_label.render(lbl,True,TEXT_SEC),(10,y))
+            vt=self.sb_value.render(val,True,vc); surf.blit(vt,(PANEL_W-10-vt.get_width(),y)); y+=SIDEBAR_STAT_ROW
         for sy in self._sep: pygame.draw.line(surf,BORDER,(8,sy),(PANEL_W-8,sy),1)
-        surf.blit(self.font_xs.render("VEHICLES",True,TEXT_SEC),(10,self._lbl_y['vehicles']))
+        surf.blit(self.sb_header.render("VEHICLES",True,TEXT_SEC),(10,self._lbl_y['vehicles']))
         self.spin_vehicles.draw(surf)
-        surf.blit(self.font_xs.render("CAPACITY",True,TEXT_SEC),(10,self._lbl_y['capacity']))
+        surf.blit(self.sb_header.render("CAPACITY",True,TEXT_SEC),(10,self._lbl_y['capacity']))
         self.spin_capacity.draw(surf)
-        surf.blit(self.font_xs.render("GENERATIONS",True,TEXT_SEC),(10,self._lbl_y['gens']))
+        surf.blit(self.sb_header.render("GENERATIONS",True,TEXT_SEC),(10,self._lbl_y['gens']))
         self.spin_gen.draw(surf)
-        surf.blit(self.font_xs.render("POPULATION",True,TEXT_SEC),(10,self._lbl_y['pop']))
+        surf.blit(self.sb_header.render("POPULATION",True,TEXT_SEC),(10,self._lbl_y['pop']))
         self.spin_pop.draw(surf)
-        surf.blit(self.font_xs.render("RAND COUNT",True,TEXT_SEC),(10,self._lbl_y['rand_count']))
+        surf.blit(self.sb_header.render("RAND COUNT",True,TEXT_SEC),(10,self._lbl_y['rand_count']))
         self.spin_rand_count.draw(surf)
-        surf.blit(self.font_xs.render("ANIM SPEED",True,TEXT_SEC),(10,self._lbl_y['speed']))
+        surf.blit(self.sb_header.render("ANIM SPEED",True,TEXT_SEC),(10,self._lbl_y['speed']))
         self.slider.draw(surf)
-        surf.blit(self.font_xs.render("ACTIONS",True,TEXT_SEC),(10,self._lbl_y['actions']))
+        surf.blit(self.sb_header.render("ACTIONS",True,TEXT_SEC),(10,self._lbl_y['actions']))
         self.btn_depot.draw(surf); self.btn_rand_all.draw(surf)
         self.btn_solve.draw(surf); self.btn_clear.draw(surf)
-        ROUTE_SECTION_H = 170
-        route_top = H - ROUTE_SECTION_H
+        route_top = H - SIDEBAR_ROUTE_SECTION_H
         pygame.draw.line(surf,BORDER,(8,route_top),(PANEL_W-8,route_top),1)
-        surf.blit(self.font_xs.render("ROUTES  (km)",True,TEXT_SEC),(10,route_top+4))
+        surf.blit(self.sb_header.render("ROUTES  (km)",True,TEXT_SEC),(10,route_top+4))
         if self.routes and self.depot:
             max_show=min(len(self.routes),6)
             for i,r in enumerate(self.routes[:max_show]):
                 col=VEHICLE_COLORS[r.vehicle_id%len(VEHICLE_COLORS)]
-                ry=route_top+20+i*22
-                pygame.draw.circle(surf,col,(18,ry+7),5)
+                ry=route_top+22+i*SIDEBAR_ROUTE_ROW
+                pygame.draw.circle(surf,col,(18,ry+8),5)
                 tk=next((t for t in self.trucks if t.route.vehicle_id==r.vehicle_id),None)
-                done_mark="✓" if tk and tk.done else " "
                 km=route_km(self.depot,r)
                 total_d=sum(r.nodes[j].demand for j in range(len(r.nodes)))
-                txt=f"V{r.vehicle_id+1} {done_mark}  {len(r.nodes)}stops  {km:.2f}km  d:{total_d}"
-                info=self.font_xs.render(txt,True,col if(tk and tk.done) else TEXT_PRI)
-                surf.blit(info,(28,ry))
+                tx_col=col if(tk and tk.done) else TEXT_PRI
+                prefix=f"V{r.vehicle_id+1} "
+                suffix=f"  {len(r.nodes)}stops  {km:.2f}km  d:{total_d}"
+                rx,ry_text=28,ry+1
+                surf.blit(self.sb_routes.render(prefix,True,tx_col),(rx,ry_text))
+                mark_x=rx+self.sb_routes.size(prefix)[0]
+                mark_cy=ry_text+self.sb_routes.get_height()//2
+                if tk and tk.done:
+                    pygame.draw.rect(surf,col,(mark_x+1,mark_cy-3,6,6))
+                surf.blit(self.sb_routes.render(suffix,True,tx_col),(mark_x+9,ry_text))
         else:
-            nh=self.font_xs.render("No routes yet",True,TEXT_SEC)
-            surf.blit(nh,(10,route_top+22))
-        pygame.draw.line(surf,BORDER,(8,H-38),(PANEL_W-8,H-38),1)
+            nh=self.sb_routes.render("No routes yet",True,TEXT_SEC)
+            surf.blit(nh,(10,route_top+24))
+        status_top=H-42
+        pygame.draw.line(surf,BORDER,(8,status_top),(PANEL_W-8,status_top),1)
         words=self.status.split(); ln=""; lines=[]
         for w in words:
             t=(ln+" "+w).strip()
-            if self.font_xs.size(t)[0]>PANEL_W-18: lines.append(ln); ln=w
+            if self.sb_status.size(t)[0]>PANEL_W-18: lines.append(ln); ln=w
             else: ln=t
         if ln: lines.append(ln)
         for i,l in enumerate(lines[:2]):
-            surf.blit(self.font_xs.render(l,True,TEXT_PRI),(10,H-33+i*14))
+            surf.blit(self.sb_status.render(l,True,TEXT_PRI),(10,status_top+4+i*SIDEBAR_STATUS_LINE))
 
     def draw_cursor_hint(self,surf):
         if self.placing_depot:
@@ -759,6 +883,8 @@ class VRPApp:
             dt=min(self.clock.tick(60)/1000.0,0.05)
             for ev in pygame.event.get():
                 if ev.type==pygame.QUIT: running=False
+                elif ev.type==pygame.VIDEORESIZE:
+                    self._on_resize(ev.w,ev.h)
                 if self.demand_screen is not None:
                     self.demand_screen.handle(ev)
                     if self.demand_screen.cancelled: self.demand_screen=None; self.status="Solve cancelled."
