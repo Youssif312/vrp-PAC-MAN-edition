@@ -1,4 +1,4 @@
-import pygame, math, random, sys, os
+"""import pygame, math, random, sys, os
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
@@ -948,4 +948,4 @@ class VRPApp:
         pygame.quit()
 
 if __name__=="__main__":
-    VRPApp().run()
+    VRPApp().run()"""
