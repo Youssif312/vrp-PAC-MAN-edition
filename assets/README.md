@@ -259,18 +259,15 @@ python main.py
 
 | Name | LinkedIn |
 |---|---|
-| A'laa Mohammed | [Add LinkedIn](#) |
-| Basmala Samy | [Add LinkedIn](#) |
-| Jowiria Hassan | [Add LinkedIn](#) |
-| Rawan Mohammed | [Add LinkedIn](#) |
-| Abdulrahman Islam | [Add LinkedIn](#) |
-| Habiba Essam | [Add LinkedIn](#) |
-| Moatasem Mohammed | [Add LinkedIn](#) |
-| Sohila Ismail | [Add LinkedIn](#) |
-| Youssef Abdullah | [Add LinkedIn](#) |
-
-> Replace the `#` placeholders above with each member's actual LinkedIn profile URL.
-
+| A'laa Mohammed | [![LinkedIn](https://img.shields.io/badge/LinkedIn-0077B5?style=flat&logo=linkedin&logoColor=white)](https://www.linkedin.com/in/a-laa-muhammed-0a9a29329/) |
+| Basmala Samy | [![LinkedIn](https://img.shields.io/badge/LinkedIn-0077B5?style=flat&logo=linkedin&logoColor=white)](https://www.linkedin.com/in/basmala-samy-386173323/) |
+| Jowiria Hassan | [![LinkedIn](https://img.shields.io/badge/LinkedIn-0077B5?style=flat&logo=linkedin&logoColor=white)](https://www.linkedin.com/in/jowiria-hassan-730755211/) |
+| Rawan Mohammed | [![LinkedIn](https://img.shields.io/badge/LinkedIn-0077B5?style=flat&logo=linkedin&logoColor=white)](https://www.linkedin.com/in/rony-a67793347/) |
+| Abdulrahman Islam | [![LinkedIn](https://img.shields.io/badge/LinkedIn-0077B5?style=flat&logo=linkedin&logoColor=white)](https://www.linkedin.com/in/abdelrahman-eslam-982563343/) |
+| Habiba Essam | [![LinkedIn](https://img.shields.io/badge/LinkedIn-0077B5?style=flat&logo=linkedin&logoColor=white)](https://www.linkedin.com/in/habiba-essam0/) |
+| Moatasem Mohammed | [![LinkedIn](https://img.shields.io/badge/LinkedIn-0077B5?style=flat&logo=linkedin&logoColor=white)](https://www.linkedin.com/in/moatasem-mohammed-4b9476375/) |
+| Sohila Ismail | [![LinkedIn](https://img.shields.io/badge/LinkedIn-0077B5?style=flat&logo=linkedin&logoColor=white)](https://www.linkedin.com/in/sohila-ismail-806888324/) |
+| Youssef Abdullah | [![LinkedIn](https://img.shields.io/badge/LinkedIn-0077B5?style=flat&logo=linkedin&logoColor=white)](https://www.linkedin.com/in/youssef-abdalla-749a01372/) |
 ---
 
 ## 📚 References
@@ -289,4 +286,4 @@ This project was developed for the **CS212 — Artificial Intelligence** course.
 
 ---
 
-<p align="center"><sub>Made with ❤️ and 👻 — 🟡 waka waka, optimize your routes. 🟡</sub></p>
+<p align="center"><sub>Made with ❤️ and 👻 — 🟡 MA3ANN VS ELDA3bala, optimize your routes. 🟡</sub></p>
