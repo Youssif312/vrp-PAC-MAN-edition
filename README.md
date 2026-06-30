@@ -282,7 +282,7 @@ python main.py
 
 ## 📄 License
 
-This project was developed for the **CS212 — Artificial Intelligence** course. Add a license of your choice (MIT recommended) if you intend to open-source it further.
+This project was developed for the **CS212 — Artificial Intelligence** course.
 
 ---
 
