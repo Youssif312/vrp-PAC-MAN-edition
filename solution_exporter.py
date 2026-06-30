@@ -1,20 +1,32 @@
 """
 solution_exporter.py
 --------------------
-Generates a PDF report of the solved VRP routes.
+Generates a PDF report of the solved VRP routes — one vehicle per page.
 
-Each vehicle section lists:
-    V1 → Stop 1: [Customer ID]  →  [Address if available]  (demand: N)
-         Stop 2: …
-         …
-         Total distance: X.XX km   |   Total demand: N
+Page 1 layout per vehicle:
+    Vehicle  Vn
+    --------------------------------
+    Stop | Customer | Address / Location | Demand
+    1    | C5       | 44 Mohamed Mazhar St...  | 10
+    2    | C12      | ...                      | 7
+    ...
+    Route distance: X.XX km   |   Total demand: N
+
+A summary cover page is included first with totals across all vehicles.
 
 Public API
 ----------
     export_solution_pdf(routes, depot, addresses, out_path) -> (True, path) | (False, error)
 
-The `addresses` dict comes from dataset_loader.load_addresses().
-If an address is not found for a customer ID the coordinate is shown instead.
+The `addresses` dict is keyed as f"C{node.idx}" (matches how app.py builds it
+from a dataset's own Address column or the legacy addresses.xlsx fallback).
+If an address is not found for a customer the coordinate is shown instead.
+
+Output location
+----------------
+By default, PDFs are written into an "exports" folder placed next to this
+project's .py files (created automatically if missing). Pass an explicit
+out_path to override.
 """
 
 import os
@@ -41,13 +53,15 @@ from reportlab.lib.pagesizes   import A4
 from reportlab.lib.styles      import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units       import cm
 from reportlab.lib             import colors
+from reportlab.lib.enums       import TA_LEFT
 from reportlab.platypus        import (
-    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable,
+    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
+    HRFlowable, PageBreak, KeepTogether,
 )
 
 # ── default output folder ──────────────────────────────────────────────────────
-# PDFs are saved directly in the same folder as the .py files (no subfolder).
-DEFAULT_OUT_DIR = os.path.dirname(os.path.abspath(__file__))
+# PDFs are saved into an "exports" folder next to the project's .py files.
+DEFAULT_OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "exports")
 
 
 # ── colour palette (matches app theme) ────────────────────────────────────────
@@ -90,7 +104,7 @@ def _route_km(depot, route) -> float:
 
 def _address_for(node, addresses: dict) -> str:
     """Return address string for a node, fall back to coordinates."""
-    addr = addresses.get(str(node.idx), addresses.get(f"C{node.idx}", ""))
+    addr = addresses.get(f"C{node.idx}", addresses.get(str(node.idx), ""))
     if addr:
         return addr
     return f"({node.x:.0f}, {node.y:.0f})"
@@ -101,14 +115,14 @@ def _address_for(node, addresses: dict) -> str:
 def export_solution_pdf(routes, depot, addresses: dict,
                         out_path: str = None) -> tuple:
     """
-    Build the PDF.
+    Build the PDF, one vehicle per page after a short summary cover page.
 
     Parameters
     ----------
     routes    : list of Route objects (from nodes.py)
     depot     : Node object
-    addresses : dict  { customer_id_str: address_str }
-    out_path  : full file path for the PDF (auto-generated if None)
+    addresses : dict  { "C<idx>": address_str }
+    out_path  : full file path for the PDF (auto-generated into exports/ if None)
 
     Returns
     -------
@@ -120,8 +134,8 @@ def export_solution_pdf(routes, depot, addresses: dict,
             os.makedirs(DEFAULT_OUT_DIR, exist_ok=True)
             stamp    = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             out_path = os.path.join(DEFAULT_OUT_DIR, f"vrp_solution_{stamp}.pdf")
-
-        os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+        else:
+            os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
 
         doc = SimpleDocTemplate(
             out_path,
@@ -132,46 +146,61 @@ def export_solution_pdf(routes, depot, addresses: dict,
 
         styles = getSampleStyleSheet()
 
-        # custom styles
+        # Custom styles. Title uses no backColor/borderPadding box (that
+        # combination is what previously caused the overlap glitch on the
+        # first page) — instead a plain colored HRFlowable rule sits below
+        # the title text for the same visual effect, without any layout risk.
         s_title = ParagraphStyle(
             "VRPTitle",
             parent=styles["Title"],
-            fontSize=22, textColor=_GOLD,
-            backColor=_DARK, borderPadding=10,
-            spaceAfter=6,
+            fontSize=22, leading=26,
+            textColor=_GOLD,
+            alignment=TA_LEFT,
+            spaceAfter=4,
         )
         s_sub = ParagraphStyle(
             "VRPSub",
             parent=styles["Normal"],
-            fontSize=9, textColor=_GREY,
-            spaceAfter=14,
+            fontSize=9, leading=13,
+            textColor=_GREY,
+            spaceAfter=4,
         )
         s_vh = ParagraphStyle(
             "VehicleHeader",
             parent=styles["Heading2"],
-            fontSize=13, textColor=_WHITE,
-            backColor=_MID, borderPadding=(6, 8, 6, 8),
-            spaceBefore=14, spaceAfter=4,
+            fontSize=16, leading=20,
+            textColor=_WHITE,
+            spaceBefore=0, spaceAfter=6,
         )
         s_summary = ParagraphStyle(
             "RouteSummary",
             parent=styles["Normal"],
-            fontSize=9, textColor=_TEAL,
-            spaceAfter=10,
+            fontSize=10, leading=14,
+            textColor=_TEAL,
+            spaceBefore=10,
         )
         s_footer = ParagraphStyle(
             "Footer",
             parent=styles["Normal"],
-            fontSize=8, textColor=_GREY,
+            fontSize=8, leading=11,
+            textColor=_GREY,
             spaceBefore=18,
+        )
+        s_cover_row = ParagraphStyle(
+            "CoverRow",
+            parent=styles["Normal"],
+            fontSize=10, leading=15,
+            textColor=_WHITE,
         )
 
         story = []
 
-        # ── header ────────────────────────────────────────────────────────────
-        story.append(Paragraph("PAC-VRP  —  Route Solution Report", s_title))
-        stamp_str = datetime.datetime.now().strftime("%Y-%m-%d  %H:%M")
-        total_km  = sum(_route_km(depot, r) for r in routes)
+        # ── cover / summary page ─────────────────────────────────────────────
+        story.append(Paragraph("PAC-VRP — Route Solution Report", s_title))
+        story.append(HRFlowable(width="100%", thickness=1.2, color=_GOLD, spaceAfter=8))
+
+        stamp_str   = datetime.datetime.now().strftime("%Y-%m-%d  %H:%M")
+        total_km    = sum(_route_km(depot, r) for r in routes)
         total_stops = sum(len(r.nodes) for r in routes)
         story.append(Paragraph(
             f"Generated: {stamp_str}  |  "
@@ -180,23 +209,54 @@ def export_solution_pdf(routes, depot, addresses: dict,
             f"Total distance: {total_km:.2f} km",
             s_sub,
         ))
-        story.append(HRFlowable(width="100%", thickness=1, color=_GOLD, spaceAfter=10))
+        story.append(Spacer(1, 0.4 * cm))
 
-        # ── per-vehicle sections ───────────────────────────────────────────────
+        # quick per-vehicle overview table on the cover page
+        cover_data = [["Vehicle", "Stops", "Distance (km)", "Demand"]]
         for r in routes:
+            km = _route_km(depot, r)
+            demand = sum(n.demand for n in r.nodes)
+            cover_data.append([
+                f"V{r.vehicle_id + 1}", str(len(r.nodes)),
+                f"{km:.2f}", str(demand),
+            ])
+        cover_tbl = Table(
+            cover_data,
+            colWidths=[3 * cm, 3 * cm, 4 * cm, 3 * cm],
+        )
+        cover_tbl.setStyle(TableStyle([
+            ("BACKGROUND",  (0, 0), (-1, 0), _MID),
+            ("TEXTCOLOR",   (0, 0), (-1, 0), _GOLD),
+            ("FONTNAME",    (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE",    (0, 0), (-1, -1), 9),
+            ("TEXTCOLOR",   (0, 1), (-1, -1), _WHITE),
+            ("BACKGROUND",  (0, 1), (-1, -1), _DARK),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [_DARK, colors.HexColor("#020310")]),
+            ("GRID",        (0, 0), (-1, -1), 0.4, colors.HexColor("#212180")),
+            ("ALIGN",       (0, 0), (-1, -1), "CENTER"),
+            ("VALIGN",      (0, 0), (-1, -1), "MIDDLE"),
+            ("TOPPADDING",  (0, 0), (-1, -1), 6),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+        ]))
+        story.append(cover_tbl)
+        story.append(Paragraph(
+            f"Depot coordinates: ({depot.x:.0f}, {depot.y:.0f})",
+            s_footer,
+        ))
+
+        # ── one page per vehicle ──────────────────────────────────────────────
+        for r in routes:
+            story.append(PageBreak())
+
             v_col  = _V_COLORS[r.vehicle_id % len(_V_COLORS)]
             km     = _route_km(depot, r)
             demand = sum(n.demand for n in r.nodes)
 
-            # vehicle heading
-            story.append(Paragraph(
-                f"Vehicle  V{r.vehicle_id + 1}",
-                ParagraphStyle(
-                    f"VH{r.vehicle_id}",
-                    parent=s_vh,
-                    textColor=v_col,
-                ),
-            ))
+            vh_style = ParagraphStyle(
+                f"VH{r.vehicle_id}", parent=s_vh, textColor=v_col,
+            )
+            story.append(Paragraph(f"Vehicle  V{r.vehicle_id + 1}", vh_style))
+            story.append(HRFlowable(width="100%", thickness=1, color=v_col, spaceAfter=10))
 
             if not r.nodes:
                 story.append(Paragraph(
@@ -204,36 +264,25 @@ def export_solution_pdf(routes, depot, addresses: dict,
                 ))
                 continue
 
-            # build stop table
-            table_data = [
-                ["Stop", "Customer", "Address / Location", "Demand"],
-            ]
+            table_data = [["Stop", "Customer", "Address / Location", "Demand"]]
             for si, node in enumerate(r.nodes):
                 cid  = f"C{node.idx}"
                 addr = _address_for(node, addresses)
-                table_data.append([
-                    str(si + 1),
-                    cid,
-                    addr,
-                    str(node.demand),
-                ])
+                table_data.append([str(si + 1), cid, addr, str(node.demand)])
 
-            col_widths = [1.2 * cm, 2.5 * cm, 10 * cm, 2 * cm]
+            col_widths = [1.4 * cm, 2.6 * cm, 10.5 * cm, 2 * cm]
             tbl = Table(table_data, colWidths=col_widths, repeatRows=1)
             tbl.setStyle(TableStyle([
-                # header row
                 ("BACKGROUND",  (0, 0), (-1,  0), _MID),
                 ("TEXTCOLOR",   (0, 0), (-1,  0), v_col),
                 ("FONTNAME",    (0, 0), (-1,  0), "Helvetica-Bold"),
                 ("FONTSIZE",    (0, 0), (-1,  0), 9),
                 ("BOTTOMPADDING", (0, 0), (-1, 0), 6),
-                # data rows
                 ("FONTNAME",    (0, 1), (-1, -1), "Helvetica"),
                 ("FONTSIZE",    (0, 1), (-1, -1), 9),
                 ("TEXTCOLOR",   (0, 1), (-1, -1), _WHITE),
                 ("BACKGROUND",  (0, 1), (-1, -1), _DARK),
                 ("ROWBACKGROUNDS", (0, 1), (-1, -1), [_DARK, colors.HexColor("#020310")]),
-                # grid
                 ("GRID",        (0, 0), (-1, -1), 0.4, colors.HexColor("#212180")),
                 ("ALIGN",       (0, 0), (1,  -1), "CENTER"),
                 ("ALIGN",       (3, 0), (3,  -1), "CENTER"),
@@ -247,21 +296,11 @@ def export_solution_pdf(routes, depot, addresses: dict,
                 f"Route distance: {km:.2f} km  |  Total demand served: {demand}",
                 s_summary,
             ))
-            story.append(HRFlowable(
-                width="100%", thickness=0.5,
-                color=colors.HexColor("#212180"), spaceAfter=4,
-            ))
-
-        # ── footer ────────────────────────────────────────────────────────────
-        story.append(Spacer(1, 0.5 * cm))
-        story.append(Paragraph(
-            f"Depot coordinates: ({depot.x:.0f}, {depot.y:.0f})  |  "
-            f"Total fleet distance: {total_km:.2f} km",
-            s_footer,
-        ))
 
         doc.build(story)
         return True, out_path
 
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return False, str(e)

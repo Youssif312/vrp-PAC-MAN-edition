@@ -61,12 +61,18 @@ def load_dataset(path: str):
     """
     Read a VRP dataset Excel file.
 
-    Expected columns (case-insensitive):
+    Required columns (case-insensitive):
         Customer_ID | X_Coord | Y_Coord | Demand
 
+    Optional column:
+        Address     – if present, addresses are read directly from this
+                      same file, so a separate addresses.xlsx is no longer
+                      needed. (Still supported as a fallback — see
+                      load_addresses() below.)
+
     Returns:
-        depot     – dict  {x, y}   (None if no Depot row found)
-        customers – list of dicts  [{id, x, y, demand}, ...]
+        depot     – dict  {x, y}                              (None if missing)
+        customers – list of dicts [{id, x, y, demand, address}, ...]
         error     – str or None
     """
     try:
@@ -80,10 +86,11 @@ def load_dataset(path: str):
             if n not in col_map:
                 return None, [], f"Missing column: {n}"
 
-        id_col  = col_map["customer_id"]
-        x_col   = col_map["x_coord"]
-        y_col   = col_map["y_coord"]
-        d_col   = col_map["demand"]
+        id_col   = col_map["customer_id"]
+        x_col    = col_map["x_coord"]
+        y_col    = col_map["y_coord"]
+        d_col    = col_map["demand"]
+        addr_col = col_map.get("address")   # optional
 
         depot     = None
         customers = []
@@ -97,10 +104,16 @@ def load_dataset(path: str):
             except (ValueError, TypeError):
                 continue
 
+            addr = ""
+            if addr_col is not None:
+                raw = row[addr_col]
+                if pd.notna(raw):
+                    addr = str(raw).strip()
+
             if cid.lower() == "depot":
-                depot = {"x": x, "y": y}
+                depot = {"x": x, "y": y, "address": addr}
             else:
-                customers.append({"id": cid, "x": x, "y": y, "demand": d})
+                customers.append({"id": cid, "x": x, "y": y, "demand": d, "address": addr})
 
         if depot is None:
             return None, [], "No 'Depot' row found in dataset."
@@ -110,15 +123,32 @@ def load_dataset(path: str):
         return None, [], str(e)
 
 
+def addresses_from_customers(customers: list) -> dict:
+    """
+    Build the {customer_id: address} dict directly from the customers list
+    returned by load_dataset() — used when addresses are embedded in the
+    dataset file itself rather than a separate addresses.xlsx.
+    """
+    return {
+        c["id"]: c["address"]
+        for c in customers
+        if c.get("address")
+    }
+
+
 def load_addresses(path: str = None) -> dict:
     """
-    Read the address-book Excel file.
+    LEGACY FALLBACK: read a separate address-book Excel file.
+
+    This is only needed if your dataset file does NOT already have an
+    'Address' column — in that case load_dataset() reads addresses
+    directly and this function isn't needed at all.
 
     Expected columns (case-insensitive):
         Customer_ID | Address
 
     Returns dict  { "C1": "123 Main St", ... }
-    Returns empty dict on any error.
+    Returns empty dict on any error or if the file doesn't exist.
     """
     if path is None:
         path = ADDRESSES_FILE

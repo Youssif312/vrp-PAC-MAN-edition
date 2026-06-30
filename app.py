@@ -105,54 +105,54 @@ class VRPApp:
     def _init_widgets(self):
         px = 10
         pw = PANEL_W - 20
-        BH = 32
-        GAP = 6
-        y  = 82
+        BH = 30
+        GAP = 4
+        y  = 80
 
         self._stats_y = y
-        y += 4 * 20 + 6
+        y += 4 * 18 + 4
         self._sep   = []
         self._lbl_y = {}
 
         self._sep.append(y); y += GAP
-        self._lbl_y['vehicles'] = y; y += 16
+        self._lbl_y['vehicles'] = y; y += 14
         self.spin_vehicles = Spinbox((px, y, pw, BH), 3, 1, 8, self.font_sm, editable=False); y += BH + GAP
 
         self._sep.append(y); y += GAP
-        self._lbl_y['capacity'] = y; y += 16
+        self._lbl_y['capacity'] = y; y += 14
         self.spin_capacity = Spinbox((px, y, pw, BH), 10, 1, 999, self.font_sm); y += BH + GAP
 
         self._sep.append(y); y += GAP
-        self._lbl_y['gens'] = y; y += 16
+        self._lbl_y['gens'] = y; y += 14
         self.spin_gen = Spinbox((px, y, pw, BH), 200, 20, 500, self.font_xs); y += BH + GAP
-        self._lbl_y['pop'] = y; y += 16
+        self._lbl_y['pop'] = y; y += 14
         self.spin_pop = Spinbox((px, y, pw, BH), 50, 20, 300, self.font_xs); y += BH + GAP
 
         self._sep.append(y); y += GAP
-        self._lbl_y['rand_count'] = y; y += 16
+        self._lbl_y['rand_count'] = y; y += 14
         self.spin_rand_count = Spinbox((px, y, pw, BH), 15, 3, 50, self.font_xs); y += BH + GAP
 
         self._sep.append(y); y += GAP
-        self._lbl_y['speed'] = y; y += 16
-        self.slider = Slider((px, y + 16, pw, 14), 30, 500, 150.0, self.font_xs, "Speed px/s")
-        y += 16 + 14 + GAP + 4
+        self._lbl_y['speed'] = y; y += 14
+        self.slider = Slider((px, y + 14, pw, 12), 30, 500, 150.0, self.font_xs, "Speed px/s")
+        y += 14 + 12 + GAP + 2
 
         self._sep.append(y); y += GAP
-        self._lbl_y['actions'] = y; y += 16
+        self._lbl_y['actions'] = y; y += 14
         hw = (pw - 4) // 2
         self.btn_depot    = Button((px,      y, hw, BH), "DEPOT",  BTN_BG,    BTN_HOV,    self.font_xs)
         self.btn_rand_all = Button((px+hw+4, y, hw, BH), "RANDOM", BTN_RAND,  BTN_RAND_H, self.font_xs)
         y += BH + GAP
         self.btn_solve = Button((px,      y, hw, BH), "SOLVE", BTN_SOLVE, BTN_SOLVE_H, self.font_xs)
         self.btn_clear = Button((px+hw+4, y, hw, BH), "CLEAR", BTN_CLR,  BTN_CLR_H,  self.font_xs)
-        y += BH + GAP + 4
+        y += BH + GAP + 2
 
         self._sep.append(y); y += GAP
-        self._lbl_y['dataset'] = y; y += 16
+        self._lbl_y['dataset'] = y; y += 14
         self.btn_dataset = Button((px, y, pw, BH), "ADD DATASET", BTN_RAND, BTN_RAND_H, self.font_xs)
         y += BH + GAP
         self.btn_export = Button((px, y, pw, BH), "EXTRACT PDF", BTN_SOLVE, BTN_SOLVE_H, self.font_xs)
-        y += BH + GAP + 4
+        y += BH + GAP + 2
 
         self._sep.append(y); y += GAP
         self._routes_y = y
@@ -229,6 +229,7 @@ class VRPApp:
         self.node_ctr       = 0
         self.fitness_history = []
         self.fitness_graph.reset()
+        self.addresses = {}
 
         cap = self.spin_capacity.value
         for _ in range(n):
@@ -261,6 +262,7 @@ class VRPApp:
         self.fitness_graph.reset()
         self.demands         = []
         self.demand_screen   = None
+        self.addresses       = {}
         self.status          = "Canvas cleared."
         self.sound.play("clear")
 
@@ -299,19 +301,40 @@ class VRPApp:
         self.fitness_graph.reset()
         self.animating = False
         self.paused    = False
+        self.addresses = {}   # rebuilt below from this dataset
 
         dx, dy     = scale(depot_d["x"], depot_d["y"])
         self.depot = Node(dx, dy, -1)
 
         for c in customers_d:
             sx, sy = scale(c["x"], c["y"])
-            self.customers.append(Node(sx, sy, self.node_ctr, demand=c["demand"]))
+            idx = self.node_ctr
+            self.customers.append(Node(sx, sy, idx, demand=c["demand"]))
+            addr = c.get("address", "")
+            if addr:
+                # keyed by the node's assigned idx (matches how
+                # solution_exporter looks addresses up: f"C{node.idx}")
+                self.addresses[f"C{idx}"] = addr
             self.node_ctr += 1
+
+        # Fallback: if the dataset file had no Address column at all, try
+        # the legacy separate addresses.xlsx (matched by original Customer_ID
+        # from the file, e.g. "C1", "C2"...).
+        if not self.addresses:
+            legacy = load_addresses(ADDRESSES_FILE)
+            if legacy:
+                for i, c in enumerate(customers_d):
+                    orig_id = c.get("id", "")
+                    if orig_id in legacy:
+                        self.addresses[f"C{i}"] = legacy[orig_id]
 
         self._rebuild_demands()
         self.sound.play("randomize")
-        self.status = f"Loaded {len(self.customers)} customers from dataset. Press SOLVE."
-        print(f"[dataset] Loaded depot + {len(self.customers)} customers. Press SOLVE.")
+        n_addr = len(self.addresses)
+        self.status = (f"Loaded {len(self.customers)} customers "
+                       f"({n_addr} with addresses). Press SOLVE.")
+        print(f"[dataset] Loaded depot + {len(self.customers)} customers, "
+              f"{n_addr} addresses. Press SOLVE.")
 
     def export_pdf(self):
         if not self.routes or not self.depot:
@@ -319,11 +342,9 @@ class VRPApp:
             self._block_message = self.status
             print("[export] Blocked: no routes/depot yet. Solve first.")
             return
-        try:
-            self.addresses = load_addresses(ADDRESSES_FILE)
-        except Exception as e:
-            self.addresses = {}
-            print(f"[export] Warning: could not load addresses.xlsx: {e}")
+        # self.addresses was already populated when the dataset was loaded
+        # (either from the dataset file's own Address column, or the
+        # legacy addresses.xlsx fallback). No need to reload here.
 
         try:
             ok, result = export_solution_pdf(self.routes, self.depot, self.addresses)
@@ -607,7 +628,7 @@ class VRPApp:
             surf.blit(self.font_xs.render(lbl, True, TEXT_SEC), (10, y))
             vt = self.font_xs.render(val, True, vc)
             surf.blit(vt, (PANEL_W - 10 - vt.get_width(), y))
-            y += 20
+            y += 18
 
         # separators & spinboxes/sliders
         for sy in self._sep:
@@ -633,15 +654,22 @@ class VRPApp:
         self.btn_dataset.draw(surf)
         self.btn_export.draw(surf)
 
-        # route list
-        ROUTE_SECTION_H = 170
-        route_top = H - ROUTE_SECTION_H
+        # route list — starts right after the last button (computed in
+        # _init_widgets), not a hardcoded offset, so it can never overlap
+        # the buttons above it no matter how tall the panel grows.
+        route_top   = self._routes_y
+        status_top  = H - 42                 # status bar starts here
+        avail_h     = max(0, status_top - route_top - 24)  # room for entries
+        row_h       = 22
+        max_rows    = max(0, avail_h // row_h)
+
         pygame.draw.line(surf, BORDER, (8, route_top), (PANEL_W - 8, route_top), 1)
         surf.blit(self.font_xs.render("ROUTES  (km)", True, TEXT_SEC), (10, route_top + 4))
         if self.routes and self.depot:
-            for i, r in enumerate(self.routes[:6]):
+            shown = self.routes[:max_rows]
+            for i, r in enumerate(shown):
                 col = VEHICLE_COLORS[r.vehicle_id % len(VEHICLE_COLORS)]
-                ry  = route_top + 20 + i * 22
+                ry  = route_top + 20 + i * row_h
                 pygame.draw.circle(surf, col, (18, ry + 7), 5)
                 tk         = next((t for t in self.trucks if t.route.vehicle_id == r.vehicle_id), None)
                 done_mark  = "✓" if tk and tk.done else " "
@@ -650,6 +678,11 @@ class VRPApp:
                 txt        = f"V{r.vehicle_id+1} {done_mark}  {len(r.nodes)}stops  {km:.2f}km  d:{total_d}"
                 info       = self.font_xs.render(txt, True, col if (tk and tk.done) else TEXT_PRI)
                 surf.blit(info, (28, ry))
+            if len(self.routes) > max_rows:
+                more = len(self.routes) - max_rows
+                ry   = route_top + 20 + max_rows * row_h
+                mt   = self.font_xs.render(f"+ {more} more (see PDF)", True, TEXT_SEC)
+                surf.blit(mt, (10, ry))
         else:
             nh = self.font_xs.render("No routes yet", True, TEXT_SEC)
             surf.blit(nh, (10, route_top + 22))
