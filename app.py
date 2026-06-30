@@ -16,6 +16,9 @@ from widgets import Button, Spinbox, Slider
 from screens import DemandInputScreen, FitnessGraph
 from ga_runner import run_ga, LOGIC_OK
 
+from dataset_loader   import DatasetPanel, load_addresses, ADDRESSES_FILE
+from solution_exporter import export_solution_pdf
+
 
 # ── Helper: pixel font ─────────────────────────────────────────────────────────
 
@@ -31,10 +34,62 @@ def _pxfont(sz, bold=False):
 # ── Main application ───────────────────────────────────────────────────────────
 
 class VRPApp:
+    #NEW------------------------------------
+    def _inject_dataset(self, depot_d: dict, customers_d: list):
 
+        import math
+        from nodes import Node
+
+        # canvas bounds
+        mg = 60
+        cx0 = CANVAS_X + mg;
+        cx1 = W - mg
+        cy0 = mg;
+        cy1 = GRAPH_Y - mg
+        cw = cx1 - cx0;
+        ch = cy1 - cy0
+
+        # find bounding box of raw data
+        all_x = [depot_d["x"]] + [c["x"] for c in customers_d]
+        all_y = [depot_d["y"]] + [c["y"] for c in customers_d]
+        rx0, rx1 = min(all_x), max(all_x)
+        ry0, ry1 = min(all_y), max(all_y)
+        rw = max(rx1 - rx0, 1);
+        rh = max(ry1 - ry0, 1)
+
+        def scale(x, y):
+            sx = cx0 + (x - rx0) / rw * cw
+            sy = cy0 + (y - ry0) / rh * ch
+            return sx, sy
+
+        # reset everything
+        self.customers.clear()
+        self.routes.clear()
+        self.trucks.clear()
+        self.node_ctr = 0
+        self.fitness_history = []
+        self.fitness_graph.reset()
+
+        dx, dy = scale(depot_d["x"], depot_d["y"])
+        self.depot = Node(dx, dy, -1)
+
+        for c in customers_d:
+            sx, sy = scale(c["x"], c["y"])
+            self.customers.append(Node(sx, sy, self.node_ctr, demand=c["demand"]))
+            self.node_ctr += 1
+
+        self._rebuild_demands()
+        self.sound.play("randomize")
+        self.status = (f"Loaded {len(self.customers)} customers from dataset. "
+                       f"Press SOLVE.")
     # ── Init ───────────────────────────────────────────────────────────────────
 
     def __init__(self):
+        #NEW
+        self.demand_screen = None
+        self.dataset_panel: Optional[DatasetPanel] = None
+        self.addresses: dict = {}
+
         pygame.init()
         self.screen = pygame.display.set_mode((W, H))
         pygame.display.set_caption("PAC-VRP Solver")
@@ -121,6 +176,20 @@ class VRPApp:
         y += BH + GAP
         self.btn_solve = Button((px,      y, hw, BH), "SOLVE", BTN_SOLVE, BTN_SOLVE_H, self.font_xs)
         self.btn_clear = Button((px+hw+4, y, hw, BH), "CLEAR", BTN_CLR,  BTN_CLR_H,  self.font_xs)
+        y += BH + GAP + 4
+
+        #NEW
+        self._sep.append(y);
+        y += GAP
+        self._lbl_y['dataset'] = y;
+        y += 16
+        self.btn_dataset = Button(
+            (px, y, pw, BH), "ADD DATASET", BTN_RAND, BTN_RAND_H, self.font_xs
+        );
+        y += BH + GAP
+        self.btn_export = Button(
+            (px, y, pw, BH), "EXTRACT PDF", BTN_SOLVE, BTN_SOLVE_H, self.font_xs
+        );
         y += BH + GAP + 4
 
         self._sep.append(y); y += GAP
@@ -478,6 +547,12 @@ class VRPApp:
         self.btn_solve.draw(surf)
         self.btn_clear.draw(surf)
 
+        #NEW--------------------------------------
+        surf.blit(self.font_xs.render("DATASET / EXPORT", True, TEXT_SEC),
+                  (10, self._lbl_y['dataset']))
+        self.btn_dataset.draw(surf)
+        self.btn_export.draw(surf)
+
         # route list
         ROUTE_SECTION_H = 170
         route_top = H - ROUTE_SECTION_H
@@ -573,6 +648,25 @@ class VRPApp:
             on = self.sound.toggle()
             self.status = f"Sound {'ON' if on else 'MUTED'}"
 
+    #NEW-----------------------------------------------
+
+    def open_dataset_panel(self):
+        self.dataset_panel = DatasetPanel(
+            self.screen, self.font_lg, self.font_md, self.font_sm, self.font_xs
+        )
+
+    def export_pdf(self):
+        if not self.routes or not self.depot:
+            self.status = "Solve first before exporting."
+            return
+        # reload addresses each time so edits to the file are picked up
+        self.addresses = load_addresses(ADDRESSES_FILE)
+        ok, result = export_solution_pdf(self.routes, self.depot, self.addresses)
+        if ok:
+            self.status = f"PDF saved → {result}"
+        else:
+            self.status = f"PDF error: {result}"
+
     # ── Main loop ──────────────────────────────────────────────────────────────
 
     def run(self):
@@ -594,6 +688,22 @@ class VRPApp:
                         self._run_ga_after_demands()
                     continue
 
+                # ── NEW dataset panel ──────────────────────────────────────────────
+                if self.dataset_panel is not None:
+                    self.dataset_panel.handle(ev)
+                    res = self.dataset_panel.result()
+                    if res == "cancel":
+                        self.dataset_panel = None
+                        self.status = "Dataset load cancelled."
+                    elif res != "pending":
+                        depot_d, customers_d, err = res
+                        self.dataset_panel = None
+                        if err:
+                            self.status = f"Load error: {err}"
+                        else:
+                            self._inject_dataset(depot_d, customers_d)
+                    continue  # ← keep this so other widgets are skipped
+
                 # widgets
                 self.spin_vehicles.handle(ev)
                 self.spin_capacity.handle(ev)
@@ -609,6 +719,10 @@ class VRPApp:
                 if self.btn_rand_all.clicked(ev): self.randomize_all()
                 if self.btn_solve.clicked(ev):    self.solve()
                 if self.btn_clear.clicked(ev):    self.clear()
+
+                #NEW------------------------
+                if self.btn_dataset.clicked(ev): self.open_dataset_panel()
+                if self.btn_export.clicked(ev):  self.export_pdf()
 
                 # canvas mouse
                 if ev.type == pygame.MOUSEBUTTONDOWN:
@@ -648,6 +762,10 @@ class VRPApp:
                 self.fitness_graph.draw(self.screen)
                 self.draw_panel(self.screen)
                 self.draw_cursor_hint(self.screen)
+
+            #NEW----------------------
+            if self.dataset_panel is not None:
+                self.dataset_panel.draw()
 
             pygame.display.flip()
 
